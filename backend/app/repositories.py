@@ -198,6 +198,16 @@ def delete_document(document_id: int) -> dict:
         document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if not document:
             raise KeyError("Document not found")
+        
+        # Delete any linked freelance expenses if this document was a purchase expense
+        try:
+            extracted = json.loads(document["extracted_json"] or "{}")
+            expense_id = extracted.get("expense_id")
+            if expense_id:
+                conn.execute("DELETE FROM freelance_expenses WHERE id = ?", (int(expense_id),))
+        except Exception:
+            pass
+
         conn.execute("UPDATE audit_events SET document_id = NULL WHERE document_id = ?", (document_id,))
         conn.execute("DELETE FROM income_records WHERE document_id = ?", (document_id,))
         conn.execute(
