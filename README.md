@@ -1,31 +1,78 @@
-# Income Ledger
+# Income Ledger 🪙
 
-Local-only dashboard for salary slips and freelance invoices. It extracts income data from PDFs, groups records by Indian financial year, and estimates new-regime income tax.
+A private, local-only dashboard for managing salary slips, freelance invoices, expenses, and estimating Indian income tax. 
 
-## Quick start
+This tool automatically extracts income information from PDF documents (like salary slips or invoices), maps earnings to the Indian financial year (April 1 – March 31), provides automated tax slab estimations for both the Old and New regimes, and projects quarterly advance tax requirements.
 
-On Windows, run:
+---
+
+## 🚀 Key Features
+
+*   **Automated PDF Extraction**: Parses salary slips (extracting Basic, Gross, Net, TDS, PF, VPF, and other deductions) and freelance invoices (extracting Gross, Net, TDS, and GST).
+*   **Intelligent OCR Capabilities**: Out-of-the-box support for text-based PDFs using `pypdf`, with optional local OCR support (via Tesseract & Poppler) for scanned or image-based PDFs.
+*   **Indian Financial Year Grouping**: Automatically groups all income, deductions, and expenses into their respective Indian Financial Years (from FY 2017-18 to FY 2026-27).
+*   **Dual Regime Tax Estimation**: Compares and calculates taxes under both the Old and New tax regimes based on current and projected annual income.
+*   **Advance Tax Scheduler**: Estimates projected annual tax liability and provides an equal quarterly advance tax payment schedule (Q1–Q4).
+*   **Expense & GST Input Tracking**: Allows manual logging of business expenses and GST inputs to offset freelance earnings.
+*   **Data Portability**: Clean CSV export of compiled ledger records for direct use in Excel, Google Sheets, or for tax filing.
+*   **Local-Only Privacy**: All documents, databases, and logs are kept strictly on your local machine.
+
+---
+
+## 🛠️ Architecture & Tech Stack
+
+The application is structured into two main components:
+
+1.  **Backend (FastAPI)**:
+    *   **FastAPI**: Serves a local REST API on `http://127.0.0.1:8001`.
+    *   **SQLite**: Local database storage using `sqlite3` (located in `data/income_ledger.sqlite3`).
+    *   **PDF Processing**: Built on `pypdf` for parsing digital PDFs and `pytesseract` + `pdf2image` for OCR operations.
+2.  **Frontend (React)**:
+    *   **Vite**: Fast, modern frontend builds.
+    *   **Bootstrap**: Clean, responsive styling with support for system-wide light/dark themes.
+    *   **Recharts**: Visualizes monthly income trends, deductions, and projected tax-to-income comparisons.
+    *   **Lucide Icons**: Modern SVG iconography.
+
+---
+
+## 📂 Project Layout
+
+*   [`backend/app/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app):
+    *   [`main.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/main.py): REST API endpoints for user creation, document uploads, expenses, and dashboard metrics.
+    *   [`extraction.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/extraction.py): Extractor regex patterns and parsing engines for salary slips and freelance invoices.
+    *   [`tax.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/tax.py): Core mathematical modules implementing tax slabs, cess, standard deductions (₹75k), and rebates (e.g., ₹12 Lakh limit for FY 2025-26 under the new regime).
+    *   [`database.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/database.py) & [`repositories.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/repositories.py): SQLite schemas, migrations, and CRUD helper repositories.
+*   [`frontend/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/frontend):
+    *   [`src/main.jsx`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/frontend/src/main.jsx): Main dashboard React application, modals, forms, and charts.
+    *   [`src/styles.css`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/frontend/src/styles.css): Custom CSS stylesheets supporting both light and dark modes.
+*   [`tests/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/tests): Python test suite validating calculations, financial date boundaries, and data validations.
+*   [`data/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/data): *(Auto-generated, Git-ignored)* Local database, uploads, and application logs.
+
+---
+
+## ⚙️ Quick Start
+
+Launch the entire suite on Windows with a single command:
 
 ```powershell
 .\Start-IncomeLedger.ps1
 ```
 
-For double-click launch, use `Start-IncomeLedger.bat`. The launcher creates a Python virtual environment, installs backend dependencies, starts the API, starts the React dashboard, and opens the app in your browser. If the app is already running, it reuses the existing local servers.
+*(Alternatively, double-click `Start-IncomeLedger.bat` to launch from file explorer.)*
 
-## Project layout
+### What this script does:
+1.  Verifies/creates a local Python Virtual Environment (`.venv`).
+2.  Installs all required backend libraries (`requirements.txt`).
+3.  Installs all required React modules (`frontend/package.json`).
+4.  Launches the FastAPI backend server on `http://127.0.0.1:8001`.
+5.  Launches the Vite React frontend server on `http://127.0.0.1:5173`.
+6.  Opens your web browser automatically to start managing your ledger.
 
-- `backend/` - FastAPI API, SQLite storage, PDF extraction, tax logic.
-- `frontend/` - React/Vite dashboard.
-- `tests/` - Python unit tests for financial year, tax, extraction, and matching logic.
-- `data/` - Runtime database and uploaded PDFs. This folder is created automatically and is ignored by Git.
+---
 
-## Notes
+## ⚠️ Notes & OCR Setup
 
-- Data stays local on this PC.
-- OCR is optional. Text-based PDFs work with `pypdf`; scanned PDFs can use OCR if Tesseract and Poppler are installed locally.
-- Tax calculation is India-focused and intended as an estimate, not filing advice.
-- Tax slabs are stored for FY 2017-18 through FY 2026-27. Old-regime rates are available for all 10 years; new-regime rates are available from FY 2020-21 onward.
-- The app selects the default regime for the selected financial year and also returns old/new comparisons where both regimes exist.
-- Current-year constants use Income Tax Department / Income-tax Act 2025 material for the Rs 12 lakh new-regime rebate threshold, 4% cess, and Rs 75,000 salary standard deduction.
-- Surcharge, senior-citizen slabs, special-rate income, and marginal relief are not yet modeled.
-- Local ports: dashboard `http://127.0.0.1:5173`, API `http://127.0.0.1:8001`.
+*   **Privacy first**: No uploaded documents are ever sent to any remote servers.
+*   **Optional OCR**: To process scanned documents:
+    1.  Install **Tesseract OCR** on your PC and add its path to your system environment variables.
+    2.  Install **Poppler** (for PDF-to-image conversion) and add its `/bin` directory to your system environment variables.
