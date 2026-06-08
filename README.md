@@ -109,9 +109,14 @@ LOCAL_AI_RENDERED_PAGES=1
 
 ## 📜 Changelog
 
+- **v0.1.2 (2026-06-09)**:
+  * Replaced the document delete confirm flow with an in-app modal so dashboard deletions trigger reliably.
+  * Corrected tax projection annualization to use elapsed financial-year months for partial-year data.
+  * Kept the selected user stable across refreshes within the same browser session.
+  * Aligned tax comparison cards with projected old/new regime values and cleaned up regime labels.
+
 - **v0.1.1 (2026-06-08)**: 
   * Upgraded dashboard visual design (3D perspective hovers, glassmorphism panels, floating background blobs).
   * Improved dark mode text contrast and theme-aware inputs/tables.
   * Enhanced database deletion to cascade to freelance expenses on purchase document deletion.
   * Added unit test suite for document/expense deletion cascades.
-

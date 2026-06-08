@@ -27,7 +27,7 @@ from .repositories import (
     list_financial_years,
     list_users,
 )
-from .tax import calculate_quarterly_advance_tax, calculate_tax_for_financial_year, calculate_tax_options, estimate_year_end, tax_slabs_catalog
+from .tax import calculate_quarterly_advance_tax, calculate_tax_for_financial_year, calculate_tax_options, elapsed_financial_year_months, estimate_year_end, tax_slabs_catalog
 
 
 app = FastAPI(title="Income Ledger API")
@@ -242,20 +242,23 @@ def financial_years() -> list[str]:
 @app.get("/api/dashboard/{user_id}/{financial_year}")
 def dashboard(user_id: str, financial_year: str) -> dict:
     data = dashboard_data(user_id, financial_year)
-    tax_options = calculate_tax_options(
+    current_tax_options = calculate_tax_options(
         financial_year,
         data["summary"]["salary_income"],
         data["summary"]["freelance_profit"],
     )
-    tax = tax_options["selected"]
-    predicted_salary = estimate_year_end(data["summary"]["salary_income"], data["summary"]["months_observed"])
-    predicted_freelance_profit = estimate_year_end(data["summary"]["freelance_profit"], data["summary"]["months_observed"])
+    tax = current_tax_options["selected"]
+    projection_months = elapsed_financial_year_months(financial_year)
+    predicted_salary = estimate_year_end(data["summary"]["salary_income"], projection_months)
+    predicted_freelance_profit = estimate_year_end(data["summary"]["freelance_profit"], projection_months)
     predicted_tax = calculate_tax_for_financial_year(financial_year, predicted_salary, predicted_freelance_profit, tax["regime"])
+    predicted_tax_options = calculate_tax_options(financial_year, predicted_salary, predicted_freelance_profit)
     quarterly_advance_tax = calculate_quarterly_advance_tax(predicted_tax["total_tax"])
     data["tax"] = {
         **tax,
-        "options": tax_options["options"],
-        "available_regimes": tax_options["available_regimes"],
+        "options": predicted_tax_options["options"],
+        "current_options": current_tax_options["options"],
+        "available_regimes": predicted_tax_options["available_regimes"],
         "tds_paid": data["summary"]["tds_paid"],
         "remaining_tax": round(max(0, tax["total_tax"] - data["summary"]["tds_paid"]), 2),
         "predicted_salary_income": predicted_salary,
@@ -263,6 +266,7 @@ def dashboard(user_id: str, financial_year: str) -> dict:
         "predicted_annual_income": round(predicted_salary + predicted_freelance_profit, 2),
         "predicted_taxable_income": predicted_tax["taxable_income"],
         "predicted_total_tax": predicted_tax["total_tax"],
+        "projection_months": projection_months,
         "quarterly_advance_tax": quarterly_advance_tax,
     }
     return data

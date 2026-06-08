@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 
 @dataclass(frozen=True)
@@ -198,3 +199,21 @@ def calculate_new_regime_tax(taxable_income: float) -> dict:
 def estimate_year_end(current_total: float, months_observed: int) -> float:
     months_observed = max(1, min(12, months_observed))
     return round((float(current_total or 0) / months_observed) * 12, 2)
+
+
+def elapsed_financial_year_months(financial_year: str, today: date | None = None) -> int:
+    today = today or date.today()
+    try:
+        start_year = int(str(financial_year).replace("FY ", "").split("-")[0])
+    except (ValueError, IndexError):
+        return 12
+
+    current_start_year = today.year if today.month >= 4 else today.year - 1
+    if start_year < current_start_year:
+        return 12
+    if start_year > current_start_year:
+        return 1
+
+    start_month_index = 4
+    elapsed = (today.year - start_year) * 12 + (today.month - start_month_index) + 1
+    return max(1, min(12, elapsed))

@@ -789,6 +789,29 @@ h2 span {
   margin-bottom: 24px;
 }
 
+.deleteConfirmModal {
+  max-width: 560px;
+}
+
+.deleteSummary {
+  background: var(--app-surface-2);
+  border: 1.5px solid var(--app-border);
+  border-radius: 12px;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 24px;
+  padding: 16px 18px;
+}
+
+.deleteSummary strong {
+  color: var(--app-heading);
+}
+
+.deleteSummary span {
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
 .reviewGrid {
   display: grid;
   gap: 16px;

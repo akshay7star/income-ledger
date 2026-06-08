@@ -102,10 +102,17 @@ async function api(path, options) {
 }
 
 function App() {
+  const initialSelectedUser = (() => {
+    try {
+      return sessionStorage.getItem('income-ledger-selected-user') || 'all';
+    } catch {
+      return 'all';
+    }
+  })();
   const [users, setUsers] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [years, setYears] = useState([]);
-  const [selectedUser, setSelectedUser] = useState('all');
+  const [selectedUser, setSelectedUser] = useState(initialSelectedUser);
   const [selectedYear, setSelectedYear] = useState('');
   const [dashboard, setDashboard] = useState(null);
   const [reviewDoc, setReviewDoc] = useState(null);
@@ -140,11 +147,20 @@ function App() {
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
+    try {
+      sessionStorage.setItem('income-ledger-selected-user', selectedUser);
+    } catch {}
   }, [selectedUser]);
 
   useEffect(() => {
     selectedYearRef.current = selectedYear;
   }, [selectedYear]);
+
+  useEffect(() => {
+    if (selectedUser === 'all') return;
+    if (users.some((user) => String(user.id) === String(selectedUser))) return;
+    setSelectedUser('all');
+  }, [users, selectedUser]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -501,7 +517,7 @@ function TaxComparison({ tax }) {
     <div className="taxCompare">
       {rows.map((row) => (
         <div key={row.regime}>
-          <span>{row.regime}{row.is_default_regime ? ' default' : ''}</span>
+          <span>{row.regime === 'old' ? 'Old regime' : 'New regime'}{row.is_default_regime ? ' (default)' : ''}</span>
           <strong>{currency(row.total_tax)}</strong>
           <small>Taxable {currency(row.taxable_income)} · Deduction {currency(row.salary_standard_deduction)}</small>
         </div>
@@ -536,11 +552,46 @@ function Metric({ icon, label, value }) {
 }
 
 function DocumentPanel({ documents, pendingDocs, onReview, onDeleted }) {
-  async function deleteDocument(event, document) {
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  function requestDelete(event, document) {
     event.stopPropagation();
-    if (!window.confirm(`Delete ${document.original_name} and any linked record?`)) return;
-    await api(`/documents/${document.id}`, { method: 'DELETE' });
-    onDeleted();
+    setDeleteError('');
+    setDeleteTarget(document);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await api(`/documents/${deleteTarget.id}`, { method: 'DELETE' });
+      setDeleteTarget(null);
+      await onDeleted();
+    } catch (error) {
+      setDeleteError(error.message);
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  function closeDeleteModal() {
+    if (isDeleting) return;
+    setDeleteTarget(null);
+    setDeleteError('');
+  }
+
+  function openForReview(event, document) {
+    if (event.target.closest('a, button, .rowActions')) return;
+    onReview(document);
+  }
+
+  function handleRowKeyDown(event, document) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onReview(document);
   }
 
   return (
@@ -548,7 +599,7 @@ function DocumentPanel({ documents, pendingDocs, onReview, onDeleted }) {
       <h2><FileText size={18} /> Documents <span className="badge text-bg-warning">{pendingDocs.length} pending</span></h2>
       <div className="list">
         {documents.map((doc) => (
-          <div className="documentRow" key={doc.id} role="button" tabIndex={0} onClick={() => onReview(doc)}>
+          <div className="documentRow" key={doc.id} role="button" tabIndex={0} onClick={(event) => openForReview(event, doc)} onKeyDown={(event) => handleRowKeyDown(event, doc)}>
             <div>
               <strong>{doc.original_name}</strong>
               <span>{doc.document_type} · {doc.status} · confidence {Math.round((doc.confidence || 0) * 100)}%</span>
@@ -556,9 +607,9 @@ function DocumentPanel({ documents, pendingDocs, onReview, onDeleted }) {
                 Open source PDF
               </a>
             </div>
-            <div className="rowActions">
+            <div className="rowActions" onClick={(event) => event.stopPropagation()}>
               {doc.warnings?.length > 0 && <AlertTriangle size={16} className="text-warning" />}
-              <button className="btn btn-sm btn-outline-danger" type="button" title="Delete document" onClick={(event) => deleteDocument(event, doc)}>
+              <button className="btn btn-sm btn-outline-danger" type="button" title="Delete document" onClick={(event) => requestDelete(event, doc)}>
                 <Trash2 size={15} />
               </button>
             </div>
@@ -566,6 +617,25 @@ function DocumentPanel({ documents, pendingDocs, onReview, onDeleted }) {
         ))}
         {documents.length === 0 && <p className="muted">Upload a PDF to begin.</p>}
       </div>
+      {deleteTarget && (
+        <div className="modalBackdrop" onClick={closeDeleteModal}>
+          <div className="modal deleteConfirmModal shadow-lg" role="dialog" aria-modal="true" aria-labelledby="delete-document-title" onClick={(event) => event.stopPropagation()}>
+            <h2 id="delete-document-title"><Trash2 size={18} /> Delete document?</h2>
+            <p>This removes the PDF and any linked income or expense data from the dashboard.</p>
+            <div className="deleteSummary">
+              <strong>{deleteTarget.original_name}</strong>
+              <span>{deleteTarget.document_type} | {deleteTarget.status}</span>
+            </div>
+            {deleteError && <div className="alert alert-danger">{deleteError}</div>}
+            <div className="modalActions">
+              <button className="btn btn-outline-secondary" type="button" onClick={closeDeleteModal} disabled={isDeleting}>Cancel</button>
+              <button className="btn btn-danger" type="button" onClick={confirmDelete} disabled={isDeleting}>
+                <Trash2 size={16} /> {isDeleting ? 'Deleting...' : 'Delete document'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
