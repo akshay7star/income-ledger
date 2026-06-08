@@ -54,6 +54,44 @@ function financialYearForDate(value) {
   return `FY ${start}-${String(start + 1).slice(-2)}`;
 }
 
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="premium-tooltip">
+        <div className="premium-tooltip-title">{label}</div>
+        {payload.map((item, index) => {
+          // Resolve actual color from gradient url if needed
+          let markerColor = item.color || item.fill;
+          if (markerColor.includes('url')) {
+            const gradId = markerColor.replace('url(#', '').replace(')', '');
+            const colors = {
+              gradSalary: '#4f46e5',
+              gradFreelance: '#10b981',
+              gradExpenses: '#f43f5e',
+              gradGst: '#06b6d4',
+              gradPf: '#3b82f6',
+              gradVpf: '#8b5cf6',
+              gradTax: '#f43f5e',
+              gradIncome: '#6366f1'
+            };
+            markerColor = colors[gradId] || '#6366f1';
+          }
+          return (
+            <div className="premium-tooltip-item" key={index}>
+              <div>
+                <span className="premium-tooltip-marker" style={{ backgroundColor: markerColor }} />
+                {item.name}:
+              </div>
+              <strong>{currency(item.value)}</strong>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  return null;
+};
+
 async function api(path, options) {
   const response = await fetch(`${API}${path}`, options);
   if (!response.ok) {
@@ -381,18 +419,44 @@ function Dashboard({ dashboard }) {
         <div className="panel">
           <h2>Income trend</h2>
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={dashboard.monthly}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip formatter={(value) => currency(value)} />
-              <Legend />
-              <Bar dataKey="salary" fill="#2563eb" />
-              <Bar dataKey="freelance" fill="#16a34a" />
-              <Bar dataKey="expenses" fill="#f97316" />
-              <Bar dataKey="expense_gst" fill="#0d9488" />
-              <Bar dataKey="pf" fill="#0891b2" />
-              <Bar dataKey="vpf" fill="#9333ea" />
+            <BarChart data={dashboard.monthly} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gradSalary" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.85}/>
+                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0.2}/>
+                </linearGradient>
+                <linearGradient id="gradFreelance" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.85}/>
+                  <stop offset="95%" stopColor="#059669" stopOpacity={0.2}/>
+                </linearGradient>
+                <linearGradient id="gradExpenses" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f97316" stopOpacity={0.85}/>
+                  <stop offset="95%" stopColor="#ea580c" stopOpacity={0.2}/>
+                </linearGradient>
+                <linearGradient id="gradGst" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.85}/>
+                  <stop offset="95%" stopColor="#0891b2" stopOpacity={0.2}/>
+                </linearGradient>
+                <linearGradient id="gradPf" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.85}/>
+                  <stop offset="95%" stopColor="#2563eb" stopOpacity={0.2}/>
+                </linearGradient>
+                <linearGradient id="gradVpf" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#a855f7" stopOpacity={0.85}/>
+                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.2}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="5 5" vertical={false} />
+              <XAxis dataKey="month" tickLine={false} />
+              <YAxis tickLine={false} axisLine={false} />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend iconType="circle" iconSize={8} />
+              <Bar name="Salary" dataKey="salary" fill="url(#gradSalary)" radius={[5, 5, 0, 0]} />
+              <Bar name="Freelance" dataKey="freelance" fill="url(#gradFreelance)" radius={[5, 5, 0, 0]} />
+              <Bar name="Expenses" dataKey="expenses" fill="url(#gradExpenses)" radius={[5, 5, 0, 0]} />
+              <Bar name="GST" dataKey="expense_gst" fill="url(#gradGst)" radius={[5, 5, 0, 0]} />
+              <Bar name="PF" dataKey="pf" fill="url(#gradPf)" radius={[5, 5, 0, 0]} />
+              <Bar name="VPF" dataKey="vpf" fill="url(#gradVpf)" radius={[5, 5, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -402,14 +466,24 @@ function Dashboard({ dashboard }) {
             <LineChart data={[
               { name: 'Current', tax: tax.total_tax, income: summary.taxable_income },
               { name: 'Predicted year end', tax: tax.predicted_total_tax, income: tax.predicted_taxable_income },
-            ]}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip formatter={(value) => currency(value)} />
-              <Legend />
-              <Line type="monotone" dataKey="income" stroke="#7c3aed" strokeWidth={2} />
-              <Line type="monotone" dataKey="tax" stroke="#dc2626" strokeWidth={2} />
+            ]} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.9}/>
+                  <stop offset="95%" stopColor="#4f46e5" stopOpacity={0.3}/>
+                </linearGradient>
+                <linearGradient id="gradTax" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.9}/>
+                  <stop offset="95%" stopColor="#e11d48" stopOpacity={0.3}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="5 5" vertical={false} />
+              <XAxis dataKey="name" tickLine={false} />
+              <YAxis tickLine={false} axisLine={false} />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend iconType="circle" iconSize={8} />
+              <Line name="Taxable Income" type="monotone" dataKey="income" stroke="url(#gradIncome)" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+              <Line name="Estimated Tax" type="monotone" dataKey="tax" stroke="url(#gradTax)" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
           <TaxComparison tax={tax} />

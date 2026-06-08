@@ -104,3 +104,14 @@ LOCAL_AI_RENDERED_PAGES=1
 *   **Optional OCR**: To process scanned documents:
     1.  Install **Tesseract OCR** on your PC and add its path to your system environment variables.
     2.  Install **Poppler** (for PDF-to-image conversion) and add its `/bin` directory to your system environment variables.
+
+---
+
+## 📜 Changelog
+
+- **v0.1.1 (2026-06-08)**: 
+  * Upgraded dashboard visual design (3D perspective hovers, glassmorphism panels, floating background blobs).
+  * Improved dark mode text contrast and theme-aware inputs/tables.
+  * Enhanced database deletion to cascade to freelance expenses on purchase document deletion.
+  * Added unit test suite for document/expense deletion cascades.
+
