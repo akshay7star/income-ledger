@@ -27,8 +27,34 @@ AMOUNT_PATTERNS = {
 
 AMOUNT_RE = re.compile(r"[\d,]+(?:\.\d{1,2})?")
 CURRENCY_AMOUNT_RE = re.compile(r"\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?")
+
+def _load_env_file():
+    curr = Path(__file__).resolve().parent
+    for _ in range(4):
+        env_path = curr / ".env"
+        if env_path.is_file():
+            try:
+                with env_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip("'\"")
+                            if k:
+                                os.environ[k] = v
+            except Exception:
+                pass
+            break
+        curr = curr.parent
+
+_load_env_file()
+
 LOCAL_AI_MODEL = os.getenv("LOCAL_AI_MODEL", "google/gemma-4-e4b")
 LOCAL_AI_TIMEOUT_SECONDS = float(os.getenv("LOCAL_AI_TIMEOUT_SECONDS", "120"))
+LOCAL_AI_API_KEY = os.getenv("LOCAL_AI_API_KEY", "")
 LOCAL_AI_BASE_URLS = [
     item.rstrip("/")
     for item in os.getenv("LOCAL_AI_BASE_URL", "http://127.0.0.1:1234/v1").split(",")
@@ -218,10 +244,13 @@ def render_pdf_pages_for_ai(path: Path, warnings: list[str]) -> list[str]:
 
 
 def post_local_ai_json(url: str, payload: dict) -> dict:
+    headers = {"Content-Type": "application/json"}
+    if LOCAL_AI_API_KEY:
+        headers["Authorization"] = f"Bearer {LOCAL_AI_API_KEY}"
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:

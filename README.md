@@ -70,9 +70,37 @@ Launch the entire suite on Windows with a single command:
 
 ---
 
+## 🤖 Custom AI Model Configuration
+
+By default, the application connects to a local instance of **LM Studio** running on `http://127.0.0.1:1234/v1` using `google/gemma-4-e4b`.
+
+If you wish to configure a different local host, switch to a cloud service (e.g. OpenAI, Groq, DeepSeek, or any OpenAI-compatible provider), you can define these settings in a `.env` file in the root of the project.
+
+### Setting up a `.env` file
+Create a file named `.env` in the project root directory and add the following keys as needed:
+
+```env
+# URL for your AI provider (comma-separated if using multiple endpoints for fallbacks)
+LOCAL_AI_BASE_URL=https://api.openai.com/v1
+
+# The API key required by your cloud provider (e.g., OpenAI, Groq, etc.)
+LOCAL_AI_API_KEY=your-actual-api-key-here
+
+# The model name to target (e.g., gpt-4o-mini, llama3-70b-8192, etc.)
+LOCAL_AI_MODEL=gpt-4o-mini
+
+# Timeout for API requests in seconds (default is 120)
+LOCAL_AI_TIMEOUT_SECONDS=120
+
+# Number of pages to render and send to the model for visual PDFs (default is 1)
+LOCAL_AI_RENDERED_PAGES=1
+```
+
+---
+
 ## ⚠️ Notes & OCR Setup
 
-*   **Privacy first**: No uploaded documents are ever sent to any remote servers.
+*   **Privacy notice**: If you configure a cloud AI endpoint (like OpenAI or Groq) in your `.env` file, the PDF document images/text will be sent to that provider for analysis. If you keep the default local settings (LM Studio), no data ever leaves your computer.
 *   **Optional OCR**: To process scanned documents:
     1.  Install **Tesseract OCR** on your PC and add its path to your system environment variables.
     2.  Install **Poppler** (for PDF-to-image conversion) and add its `/bin` directory to your system environment variables.
