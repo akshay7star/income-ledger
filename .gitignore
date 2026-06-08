@@ -11,6 +11,7 @@ __pycache__/
 *.log
 .agents/
 .project_history/
+project_context.md
 
 # Databases
 *.db
