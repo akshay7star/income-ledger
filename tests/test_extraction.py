@@ -209,3 +209,148 @@ In words ( ) : One Lakh Sixty Eight Thousand Seven Hundred Three Only Net Salary
     assert find_amount(text, "deductions_amount") == 11716.00
     assert find_amount(text, "pf_amount") == 11516.00
     assert find_amount(text, "vpf_amount") == 0
+
+
+def test_exoedge_gross_earnings_payslip_amounts_are_detected():
+    text = """
+EXO EDGE ADVANTAGE INDIA PVT LTD
+Payslip for the month of February 2026
+Gross Earnings 275,847.00 Total Deductions 17,200.00
+Net Salary : 258,647.00
+"""
+    assert find_amount(text, "gross_amount") == 275847.00
+    assert find_amount(text, "net_amount") == 258647.00
+
+
+def test_extract_text_with_nvidia_ocr_success(monkeypatch):
+    import io
+    import json
+    from pathlib import Path
+    from backend.app import extraction
+
+    # Temporarily set NVIDIA_API_KEY
+    monkeypatch.setattr(extraction, "NVIDIA_API_KEY", "fake_key")
+
+    # Mock PyMuPDF fitz module
+    class FakePixmap:
+        def tobytes(self, fmt):
+            return b"fake_png_data"
+            
+    class FakePage:
+        def load_page(self, idx):
+            return self
+        def get_pixmap(self, dpi):
+            return FakePixmap()
+
+    class FakeDoc:
+        def __init__(self, path):
+            pass
+        def __len__(self):
+            return 1
+        def load_page(self, idx):
+            return FakePage()
+
+    fake_fitz = SimpleNamespace(open=FakeDoc)
+    monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
+
+    # Mock urllib.request.urlopen
+    class FakeResponse:
+        def read(self):
+            return json.dumps({
+                "data": [
+                    {
+                        "text_detections": [
+                            {"text_prediction": {"text": "Hello World"}}
+                        ]
+                    }
+                ]
+            }).encode("utf-8")
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    def mock_urlopen(req, timeout=None):
+        return FakeResponse()
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    text, warnings = extraction.extract_text_with_nvidia_ocr(Path("dummy.pdf"))
+    assert text == "Hello World"
+    assert "Text was successfully extracted using NVIDIA OCR API." in warnings
+
+
+def test_extract_structured_data_with_ai_providers(monkeypatch):
+    import json
+    from pathlib import Path
+    from backend.app import extraction
+
+    monkeypatch.setattr(extraction, "NVIDIA_API_KEY", "nvidia_key")
+    monkeypatch.setattr(extraction, "GOOGLE_API_KEY", "google_key")
+    monkeypatch.setattr(extraction, "LOCAL_AI_BASE_URLS", ["http://localhost:1234/v1"])
+
+    captured_requests = []
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps({
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"source_document_type": "Salary Slip"}'
+                        }
+                    }
+                ]
+            }).encode("utf-8")
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    def mock_urlopen(req, timeout=None):
+        data = req.data
+        if data:
+            captured_requests.append((req.full_url, json.loads(data.decode("utf-8")), req.headers))
+        return FakeResponse()
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    # Test NVIDIA provider
+    data, warnings = extraction.extract_structured_data_with_ai(Path("dummy.pdf"), "embedded", "nvidia")
+    assert data == {"source_document_type": "Salary Slip"}
+    assert "Cloud AI analysis used model meta/llama-3.3-70b-instruct." in warnings
+
+    # Test Google provider
+    data, warnings = extraction.extract_structured_data_with_ai(Path("dummy.pdf"), "embedded", "google")
+    assert data == {"source_document_type": "Salary Slip"}
+    assert "Cloud AI analysis used model google/gemma-4-31b-it." in warnings
+
+    # Test Local provider
+    data, warnings = extraction.extract_structured_data_with_ai(Path("dummy.pdf"), "embedded", "local")
+    assert data == {"source_document_type": "Salary Slip"}
+    assert "Local AI analysis used model google/gemma-4-e4b." in warnings
+
+    assert len(captured_requests) == 3
+    # Check NVIDIA payload details
+    url1, payload1, headers1 = captured_requests[0]
+    assert url1 == "https://integrate.api.nvidia.com/v1/chat/completions"
+    assert payload1["model"] == "meta/llama-3.3-70b-instruct"
+    assert headers1["Authorization"] == "Bearer nvidia_key"
+    assert "chat_template_kwargs" not in payload1
+
+    # Check Google payload details
+    url2, payload2, headers2 = captured_requests[1]
+    assert url2 == "https://integrate.api.nvidia.com/v1/chat/completions"
+    assert payload2["model"] == "google/gemma-4-31b-it"
+    assert headers2["Authorization"] == "Bearer google_key"
+    assert payload2["chat_template_kwargs"] == {"enable_thinking": True}
+    assert payload2["temperature"] == 1.0
+
+    # Check Local payload details
+    url3, payload3, headers3 = captured_requests[2]
+    assert url3 == "http://localhost:1234/v1/chat/completions"
+    assert payload3["model"] == "google/gemma-4-e4b"
+    assert headers3.get("Authorization") is None or "Bearer" not in headers3.get("Authorization", "")
+

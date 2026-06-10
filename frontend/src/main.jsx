@@ -72,7 +72,9 @@ const CustomTooltip = ({ active, payload, label }) => {
               gradPf: '#3b82f6',
               gradVpf: '#8b5cf6',
               gradTax: '#f43f5e',
-              gradIncome: '#6366f1'
+              gradIncome: '#6366f1',
+              gradOldRegime: '#8b5cf6',
+              gradNewRegime: '#10b981'
             };
             markerColor = colors[gradId] || '#6366f1';
           }
@@ -101,6 +103,21 @@ async function api(path, options) {
   return response.json();
 }
 
+function getRealWarnings(warnings) {
+  if (!warnings) return [];
+  return warnings.filter((w) => {
+    const lowered = w.toLowerCase();
+    return !(
+      lowered.includes("used model") ||
+      lowered.includes("trying nvidia ocr") ||
+      lowered.includes("trying local ai") ||
+      lowered.includes("successfully extracted using") ||
+      lowered.includes("extracted using ocr fallback") ||
+      lowered.includes("no embedded pdf text found")
+    );
+  });
+}
+
 function App() {
   const initialSelectedUser = (() => {
     try {
@@ -119,6 +136,9 @@ function App() {
   const [status, setStatus] = useState('');
   const [uploadJobs, setUploadJobs] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem('income-ledger-theme') || 'light');
+  const [selectedAiProvider, setSelectedAiProvider] = useState(
+    () => localStorage.getItem('income-ledger-ai-provider') || 'nvidia'
+  );
   const selectedUserRef = useRef(selectedUser);
   const selectedYearRef = useRef(selectedYear);
 
@@ -192,20 +212,21 @@ function App() {
     const jobs = files.map((file, index) => ({ id: `${Date.now()}-${index}`, name: file.name, state: 'queued' }));
     setUploadJobs((current) => [...jobs, ...current].slice(0, 8));
     setStatus(`Queued ${files.length} PDF${files.length > 1 ? 's' : ''}. You can keep using the dashboard.`);
-    void processUploadQueue(files, jobs);
+    void processUploadQueue(files, jobs, selectedAiProvider);
   }
 
   function updateUploadJob(jobId, patch) {
     setUploadJobs((current) => current.map((job) => (job.id === jobId ? { ...job, ...patch } : job)));
   }
 
-  async function processUploadQueue(files, jobs) {
+  async function processUploadQueue(files, jobs, aiProvider) {
     const uploadedDocs = [];
     try {
       for (const [index, file] of files.entries()) {
         const job = jobs[index];
         const form = new FormData();
         form.append('file', file);
+        form.append('ai_provider', aiProvider);
         if (selectedUserRef.current !== 'all') form.append('user_id', selectedUserRef.current);
         setStatus(`Extracting ${index + 1} of ${files.length}: ${file.name}`);
         updateUploadJob(job.id, { state: 'extracting' });
@@ -293,6 +314,19 @@ function App() {
           {years.map((year) => (
             <option key={year} value={year}>{year}</option>
           ))}
+        </select>
+        <select
+          className="form-select"
+          value={selectedAiProvider}
+          onChange={(e) => {
+            setSelectedAiProvider(e.target.value);
+            localStorage.setItem('income-ledger-ai-provider', e.target.value);
+          }}
+          title="Select AI Provider"
+        >
+          <option value="nvidia">NVIDIA Cloud AI (Llama 3.3)</option>
+          <option value="google">Google Cloud AI (Gemma 4)</option>
+          <option value="local">Local AI (LM Studio)</option>
         </select>
         <NewUserForm onCreated={refresh} />
         <ExpenseForm users={users} selectedUser={selectedUser} onCreated={refresh} />
@@ -480,17 +514,25 @@ function Dashboard({ dashboard }) {
           <h2>Tax prediction <span>{tax.assessment_year}</span></h2>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={[
-              { name: 'Current', tax: tax.total_tax, income: summary.taxable_income },
-              { name: 'Predicted year end', tax: tax.predicted_total_tax, income: tax.predicted_taxable_income },
+              { 
+                name: 'Current', 
+                oldRegime: tax.current_options?.old?.total_tax || 0, 
+                newRegime: tax.current_options?.new?.total_tax || 0 
+              },
+              { 
+                name: 'Predicted year end', 
+                oldRegime: tax.options?.old?.total_tax || 0, 
+                newRegime: tax.options?.new?.total_tax || 0 
+              },
             ]} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
               <defs>
-                <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.9}/>
-                  <stop offset="95%" stopColor="#4f46e5" stopOpacity={0.3}/>
+                <linearGradient id="gradOldRegime" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#a855f7" stopOpacity={0.9}/>
+                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.3}/>
                 </linearGradient>
-                <linearGradient id="gradTax" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.9}/>
-                  <stop offset="95%" stopColor="#e11d48" stopOpacity={0.3}/>
+                <linearGradient id="gradNewRegime" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.9}/>
+                  <stop offset="95%" stopColor="#059669" stopOpacity={0.3}/>
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="5 5" vertical={false} />
@@ -498,8 +540,8 @@ function Dashboard({ dashboard }) {
               <YAxis tickLine={false} axisLine={false} />
               <Tooltip content={<CustomTooltip />} />
               <Legend iconType="circle" iconSize={8} />
-              <Line name="Taxable Income" type="monotone" dataKey="income" stroke="url(#gradIncome)" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
-              <Line name="Estimated Tax" type="monotone" dataKey="tax" stroke="url(#gradTax)" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+              <Line name="Old Regime" type="monotone" dataKey="oldRegime" stroke="url(#gradOldRegime)" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+              <Line name="New Regime" type="monotone" dataKey="newRegime" stroke="url(#gradNewRegime)" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
           <TaxComparison tax={tax} />
@@ -601,14 +643,22 @@ function DocumentPanel({ documents, pendingDocs, onReview, onDeleted }) {
         {documents.map((doc) => (
           <div className="documentRow" key={doc.id} role="button" tabIndex={0} onClick={(event) => openForReview(event, doc)} onKeyDown={(event) => handleRowKeyDown(event, doc)}>
             <div>
-              <strong>{doc.original_name}</strong>
+              <strong>
+                {doc.original_name}
+                {getRealWarnings(doc.warnings).length > 0 && (
+                  <AlertTriangle
+                    size={16}
+                    className="text-warning ms-2 align-middle"
+                    title={`Click to review and fix:\n\n${getRealWarnings(doc.warnings).join('\n')}`}
+                  />
+                )}
+              </strong>
               <span>{doc.document_type} · {doc.status} · confidence {Math.round((doc.confidence || 0) * 100)}%</span>
               <a href={`${API}/documents/${doc.id}/file`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
                 Open source PDF
               </a>
             </div>
             <div className="rowActions" onClick={(event) => event.stopPropagation()}>
-              {doc.warnings?.length > 0 && <AlertTriangle size={16} className="text-warning" />}
               <button className="btn btn-sm btn-outline-danger" type="button" title="Delete document" onClick={(event) => requestDelete(event, doc)}>
                 <Trash2 size={15} />
               </button>
@@ -754,39 +804,93 @@ function ExpensesPanel({ expenses, users, onDeleted }) {
 
 function ReviewModal({ document, users, onClose, onSaved }) {
   const extracted = document.extracted || {};
-  const extractedType = extracted.document_type === 'salary' ? 'salary' : 'freelance_invoice';
+  const rawExtractedType = extracted.income_type || extracted.document_type || document.document_type || 'freelance_invoice';
+  const extractedType = rawExtractedType === 'salary' ? 'salary' : 'freelance_invoice';
   const initialGross = Number(extracted.gross_amount || 0);
   const initialNet = Number(extracted.net_amount || 0);
   const initialTds = Number(extracted.tds_amount || 0);
   const initialGst = Number(extracted.gst_amount || 0);
+  const initialTdsVal = extractedType === 'freelance_invoice' && initialTds === 0 ? roundMoney(initialGross * 0.1) : initialTds;
   const [form, setForm] = useState({
     user_id: document.detected_user_id || '',
     income_type: extractedType,
     record_date: extracted.record_date || '',
     payer: extracted.payer || '',
     gross_amount: initialGross,
-    net_amount: initialNet,
-    tds_amount: extractedType === 'freelance_invoice' && initialTds === 0 ? roundMoney(initialGross * 0.1) : initialTds,
+    net_amount: extractedType === 'freelance_invoice' ? roundMoney(initialGross - initialTdsVal) : initialNet,
+    tds_amount: initialTdsVal,
     deductions_amount: extracted.deductions_amount || 0,
     pf_amount: extractedType === 'salary' ? extracted.pf_amount || 0 : 0,
     vpf_amount: extractedType === 'salary' ? extracted.vpf_amount || 0 : 0,
-    gst_amount: extractedType === 'freelance_invoice' && initialGst === 0 ? roundMoney(Math.max(0, initialNet - initialGross)) : initialGst,
+    gst_amount: 0,
   });
   const isFreelance = form.income_type === 'freelance_invoice';
 
+  const validationWarnings = useMemo(() => {
+    const warnings = [];
+    const gross = Number(form.gross_amount || 0);
+    const net = Number(form.net_amount || 0);
+    const tds = Number(form.tds_amount || 0);
+    const pf = Number(form.pf_amount || 0);
+    const vpf = Number(form.vpf_amount || 0);
+    const deds = Number(form.deductions_amount || 0);
+
+    if (form.income_type === 'salary' && gross > 0) {
+      const expectedNet = gross - (pf + vpf + tds + deds);
+      if (Math.abs(expectedNet - net) > 10.0) {
+        warnings.push({
+          type: 'salary_mismatch',
+          message: `Gross salary minus deductions and taxes does not match net amount.`,
+          expected: expectedNet,
+        });
+      }
+    }
+    if (form.income_type === 'freelance_invoice' && gross > 0) {
+      const expectedNet = gross - tds;
+      if (Math.abs(expectedNet - net) > 10.0) {
+        warnings.push({
+          type: 'freelance_mismatch',
+          message: `Gross freelance income minus TDS does not match net amount.`,
+          expected: expectedNet,
+        });
+      }
+      if (tds === 0) {
+        warnings.push({
+          type: 'no_tds',
+          message: "No TDS was recorded for this freelance invoice.",
+        });
+      }
+    }
+    return warnings;
+  }, [form]);
+
+  const allWarnings = useMemo(() => {
+    const docWarnings = document.warnings || [];
+    const filteredDocWarnings = docWarnings.filter(w =>
+      !w.includes("does not closely match net amount") &&
+      !w.includes("does not match net amount") &&
+      !w.includes("No TDS was recorded")
+    );
+    const docWarnObjects = filteredDocWarnings.map(w => ({ type: 'info', message: w }));
+    return [...docWarnObjects, ...validationWarnings];
+  }, [document.warnings, validationWarnings]);
+
   function applyIncomeType(nextType) {
-    setForm((current) => ({
-      ...current,
-      income_type: nextType,
-      tds_amount: nextType === 'freelance_invoice' && Number(current.tds_amount || 0) === 0
-        ? roundMoney(Number(current.gross_amount || 0) * 0.1)
-        : current.tds_amount,
-      gst_amount: nextType === 'freelance_invoice'
-        ? roundMoney(Math.max(0, Number(current.net_amount || 0) - Number(current.gross_amount || 0)))
-        : 0,
-      pf_amount: nextType === 'salary' ? current.pf_amount : 0,
-      vpf_amount: nextType === 'salary' ? current.vpf_amount : 0,
-    }));
+    setForm((current) => {
+      const gross = Number(current.gross_amount || 0);
+      const tds = nextType === 'freelance_invoice' && Number(current.tds_amount || 0) === 0
+        ? roundMoney(gross * 0.1)
+        : Number(current.tds_amount || 0);
+      return {
+        ...current,
+        income_type: nextType,
+        tds_amount: tds,
+        net_amount: nextType === 'freelance_invoice' ? roundMoney(gross - tds) : current.net_amount,
+        gst_amount: 0,
+        pf_amount: nextType === 'salary' ? current.pf_amount : 0,
+        vpf_amount: nextType === 'salary' ? current.vpf_amount : 0,
+      };
+    });
   }
 
   function updateMoneyField(key, value) {
@@ -795,13 +899,13 @@ function ReviewModal({ document, users, onClose, onSaved }) {
       const next = { ...current, [key]: numericValue };
       if (next.income_type === 'freelance_invoice') {
         const gross = Number(next.gross_amount || 0);
-        const net = Number(next.net_amount || 0);
-        if (key === 'gross_amount' || Number(current.tds_amount || 0) === 0) {
+        if (key === 'gross_amount') {
           next.tds_amount = roundMoney(gross * 0.1);
+          next.net_amount = roundMoney(gross - next.tds_amount);
+        } else if (key === 'tds_amount') {
+          next.net_amount = roundMoney(gross - next.tds_amount);
         }
-        if (key === 'gross_amount' || key === 'net_amount') {
-          next.gst_amount = roundMoney(Math.max(0, net - gross));
-        }
+        next.gst_amount = 0;
       }
       return next;
     });
@@ -846,9 +950,26 @@ function ReviewModal({ document, users, onClose, onSaved }) {
             </>
           )}
         </div>
-        {extracted.warnings?.length > 0 && (
+        {allWarnings.length > 0 && (
           <div className="warnings">
-            {extracted.warnings.map((warning) => <span key={warning}>{warning}</span>)}
+            {allWarnings.map((warning, index) => {
+              const isMismatch = warning.type === 'salary_mismatch' || warning.type === 'freelance_mismatch';
+              return (
+                <div key={index} className="warning-item d-flex align-items-center justify-content-between flex-wrap gap-2">
+                  <span>{warning.message}</span>
+                  {isMismatch && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline-warning"
+                      onClick={() => updateMoneyField('net_amount', warning.expected)}
+                      style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+                    >
+                      Use calculated Net: {currency(warning.expected)}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         <div className="modalActions">

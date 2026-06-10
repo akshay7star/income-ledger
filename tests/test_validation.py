@@ -92,3 +92,40 @@ def test_dashboard_sums_pf_and_vpf_from_record_metadata(monkeypatch):
     assert data["summary"]["vpf_total"] == 9093
     assert data["summary"]["provident_fund_total"] == 15155
     assert data["summary"]["total_income"] == 134189.14
+
+
+def test_validation_freelance_mismatch_warns():
+    warnings = validation_warnings(
+        FakeConnection(),
+        1,
+        {
+            "income_type": "freelance_invoice",
+            "gross_amount": 100000,
+            "net_amount": 100000,
+            "tds_amount": 10000,
+            "gst_amount": 0,
+        },
+        "FY 2026-27",
+        "Apr 2026",
+    )
+    assert "Gross freelance income minus TDS does not closely match net amount." in warnings
+
+
+def test_validation_salary_mismatch_warns():
+    warnings = validation_warnings(
+        FakeConnection(),
+        1,
+        {
+            "income_type": "salary",
+            "gross_amount": 100000,
+            "net_amount": 90000,
+            "pf_amount": 5000,
+            "vpf_amount": 0,
+            "tds_amount": 2000,
+            "deductions_amount": 0,
+        },
+        "FY 2026-27",
+        "Apr 2026",
+    )
+    assert "Gross salary minus deductions and taxes does not closely match net amount." in warnings
+

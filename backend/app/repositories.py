@@ -161,8 +161,11 @@ def list_documents() -> list[dict]:
     items = []
     for row in rows:
         item = row_to_dict(row)
-        item["extracted"] = json.loads(item.pop("extracted_json") or "{}")
-        item["warnings"] = json.loads(item.get("warnings") or "[]")
+        extracted = json.loads(item.pop("extracted_json") or "{}")
+        item["extracted"] = extracted
+        warnings = json.loads(item.get("warnings") or "[]")
+        validation_warns = extracted.get("validation_warnings", [])
+        item["warnings"] = list(set(warnings + validation_warns))
         items.append(item)
     return items
 
@@ -243,13 +246,20 @@ def validation_warnings(conn: sqlite3.Connection, user_id: int, payload: dict, f
     tds = float(payload.get("tds_amount") or 0)
     pf = float(payload.get("pf_amount") or 0)
     vpf = float(payload.get("vpf_amount") or 0)
-    total_deductions = other_deductions + tds + pf + vpf
-    if payload["income_type"] != "freelance_invoice" and gross > 0 and net > gross:
-        warnings.append("Net amount is greater than gross amount.")
-    if payload["income_type"] == "salary" and gross > 0 and total_deductions > 0 and abs((gross - total_deductions) - net) > max(10, gross * 0.02):
-        warnings.append("Gross minus deductions does not closely match net amount.")
-    if payload["income_type"] == "freelance_invoice" and tds == 0:
-        warnings.append("No TDS was recorded for this freelance invoice.")
+    gst = float(payload.get("gst_amount") or 0)
+
+    if payload["income_type"] == "salary" and gross > 0:
+        expected_net = gross - (pf + vpf + tds + other_deductions)
+        if abs(expected_net - net) > 10.0:
+            warnings.append("Gross salary minus deductions and taxes does not closely match net amount.")
+
+    if payload["income_type"] == "freelance_invoice" and gross > 0:
+        expected_net = gross - tds
+        if abs(expected_net - net) > 10.0:
+            warnings.append("Gross freelance income minus TDS does not closely match net amount.")
+        if tds == 0:
+            warnings.append("No TDS was recorded for this freelance invoice.")
+
     return warnings
 
 
@@ -261,11 +271,12 @@ def confirm_extraction(document_id: int, payload: dict) -> dict:
     income_type = payload["income_type"]
     if income_type == "freelance_invoice":
         gross = float(payload.get("gross_amount") or 0)
-        net = float(payload.get("net_amount") or 0)
-        if float(payload.get("tds_amount") or 0) == 0 and gross > 0:
-            payload["tds_amount"] = round(gross * 0.10, 2)
-        if float(payload.get("gst_amount") or 0) == 0 and net > gross > 0:
-            payload["gst_amount"] = round(net - gross, 2)
+        tds = float(payload.get("tds_amount") or 0)
+        if tds == 0 and gross > 0:
+            tds = round(gross * 0.10, 2)
+            payload["tds_amount"] = tds
+        payload["net_amount"] = round(gross - tds, 2)
+        payload["gst_amount"] = 0.0
 
     with get_connection() as conn:
         document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
@@ -435,12 +446,35 @@ def dashboard_data(user_id: str, financial_year: str) -> dict:
     pf_total = sum(row["pf_amount"] for row in records if row["income_type"] == "salary")
     vpf_total = sum(row["vpf_amount"] for row in records if row["income_type"] == "salary")
     net_income = sum(row["net_amount"] for row in records)
-    months = sorted({row["period_label"] for row in records} | {month_label(parse_date(row["expense_date"])) for row in expense_items})
+    from datetime import datetime
+    ym_set = set()
+    for row in records:
+        try:
+            ym_set.add(parse_date(row["record_date"]).strftime("%Y-%m"))
+        except Exception:
+            pass
+    for row in expense_items:
+        try:
+            ym_set.add(parse_date(row["expense_date"]).strftime("%Y-%m"))
+        except Exception:
+            pass
 
+    sorted_yms = sorted(ym_set)
     monthly = []
-    for label in months:
-        label_records = [row for row in records if row["period_label"] == label]
-        label_expenses = [row for row in expense_items if month_label(parse_date(row["expense_date"])) == label]
+    for ym in sorted_yms:
+        try:
+            dt = datetime.strptime(ym, "%Y-%m").date()
+            label = month_label(dt)
+        except Exception:
+            continue
+        label_records = [
+            row for row in records
+            if parse_date(row["record_date"]).strftime("%Y-%m") == ym
+        ]
+        label_expenses = [
+            row for row in expense_items
+            if parse_date(row["expense_date"]).strftime("%Y-%m") == ym
+        ]
         monthly.append(
             {
                 "month": label,
@@ -479,7 +513,7 @@ def dashboard_data(user_id: str, financial_year: str) -> dict:
             "provident_fund_total": round(pf_total + vpf_total, 2),
             "net_income": round(net_income, 2),
             "record_count": len(records),
-            "months_observed": len(months),
+            "months_observed": len(monthly),
         },
         "monthly": monthly,
         "records": records,

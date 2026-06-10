@@ -15,7 +15,7 @@ from pathlib import Path
 
 AMOUNT_PATTERNS = {
     "gross_amount": [
-        r"(?:gross\s+(?:pay|salary|amount)|total\s+earnings|total\s+earning)\D{0,80}([\d,]+(?:\.\d{1,2})?)",
+        r"(?:gross\s+(?:pay|salary|amount|earnings|earning)|total\s+earnings|total\s+earning)\D{0,80}([\d,]+(?:\.\d{1,2})?)",
     ],
     "net_amount": [
         r"(?:total\s+net\s+pay(?:\(a\+b\))?|a\.?\s*net\s+salary|net\s+(?:pay|salary|amount|payable))\D{0,80}([\d,]+(?:\.\d{1,2})?)",
@@ -61,18 +61,78 @@ LOCAL_AI_BASE_URLS = [
     if item.strip()
 ]
 LOCAL_AI_RENDERED_PAGES = max(1, int(os.getenv("LOCAL_AI_RENDERED_PAGES", "1")))
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
+NVIDIA_OCR_API_URL = os.getenv("NVIDIA_OCR_API_URL", "https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v1")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+
 LOCAL_AI_EXTRACTION_PROMPT = (
-    "You are a highly accurate Financial Data Analyst and Structured Extractor. "
-    "Return only raw JSON. Use null for every missing field. Schema: "
-    '{"extraction_date":"YYYY-MM-DD","source_document_type":"Invoice|Salary Slip|Payment Receipt|Bank Statement|Unknown",'
-    '"metadata":{"invoice_number":null,"reference_no":null,"billable_period":null,"date_issued":null},'
-    '"invoice_details":{"seller_name":null,"seller_gstin":null,"buyer_name":null,"buyer_gstin":null,'
-    '"total_chargeable_value":null,"grand_total_amount":null,'
-    '"taxation":{"cgst":{"rate":null,"amount":null},"sgst_or_utgst":{"rate":null,"amount":null},"other_taxes":{}}},'
-    '"payroll_data":{"period_start_date":null,"period_end_date":null,"employee_name":null,"designation":null,'
-    '"earnings":{"gross_salary":null,"basic_salary":null,"hra":null,"other_earnings":[]},'
-    '"deductions":{"pf_employee":null,"vpf_employee":null,"tax_tds":null,"gst_deduction":null,"other_deductions":[]},'
-    '"net_pay":{"final_salary_after_deductions":null}}}'
+    "You are an expert Indian Financial Data Extractor. Your task is to analyze the provided financial document (Invoice, Payslip, or Receipt) and return a strictly structured JSON response.\n\n"
+    "### GUIDELINES FOR ACCURACY:\n"
+    "1. Entity Roles:\n"
+    "   - For Invoices: 'seller_name' is the party issuing the invoice (providing services). 'buyer_name' is the client paying the invoice.\n"
+    "   - For Payslips: 'seller_name' is the Employer/Company. 'employee_name' is the Employee.\n"
+    "2. Numeric Values:\n"
+    "   - Extract raw numeric numbers only. Strip currency symbols (₹, Rs, USD) and commas before outputting.\n"
+    "   - Ensure 'total_chargeable_value' is the subtotal (before tax) and 'grand_total_amount' is the final payable value (including tax).\n"
+    "3. Indian Tax Identifiers:\n"
+    "   - Extract 15-character GSTINs (e.g., 07AAAAA1111A1Z1).\n"
+    "   - If a GSTIN is found, extract the 10-character PAN from it (chars 3 to 12) and map it as needed.\n"
+    "4. Date Formats:\n"
+    "   - Normalize all extracted dates to YYYY-MM-DD format.\n\n"
+    "### OUTPUT FORMAT:\n"
+    "Return ONLY valid JSON. Do not include markdown code block formatting (like ```json), commentary, or extra text. If a field is missing or cannot be found, set its value to null.\n\n"
+    "### SCHEMA:\n"
+    "{\n"
+    "  \"extraction_date\": \"YYYY-MM-DD\",\n"
+    "  \"source_document_type\": \"Invoice|Salary Slip|Payment Receipt|Bank Statement|Unknown\",\n"
+    "  \"metadata\": {\n"
+    "    \"invoice_number\": null,\n"
+    "    \"reference_no\": null,\n"
+    "    \"billable_period\": null,\n"
+    "    \"date_issued\": null\n"
+    "  },\n"
+    "  \"invoice_details\": {\n"
+    "    \"seller_name\": null,\n"
+    "    \"seller_gstin\": null,\n"
+    "    \"buyer_name\": null,\n"
+    "    \"buyer_gstin\": null,\n"
+    "    \"total_chargeable_value\": null,\n"
+    "    \"grand_total_amount\": null,\n"
+    "    \"taxation\": {\n"
+    "      \"cgst\": {\n"
+    "        \"rate\": null,\n"
+    "        \"amount\": null\n"
+    "      },\n"
+    "      \"sgst_or_utgst\": {\n"
+    "        \"rate\": null,\n"
+    "        \"amount\": null\n"
+    "      },\n"
+    "      \"other_taxes\": {}\n"
+    "    }\n"
+    "  },\n"
+    "  \"payroll_data\": {\n"
+    "    \"period_start_date\": null,\n"
+    "    \"period_end_date\": null,\n"
+    "    \"employee_name\": null,\n"
+    "    \"designation\": null,\n"
+    "    \"earnings\": {\n"
+    "      \"gross_salary\": null,\n"
+    "      \"basic_salary\": null,\n"
+    "      \"hra\": null,\n"
+    "      \"other_earnings\": []\n"
+    "    },\n"
+    "    \"deductions\": {\n"
+    "      \"pf_employee\": null,\n"
+    "      \"vpf_employee\": null,\n"
+    "      \"tax_tds\": null,\n"
+    "      \"gst_deduction\": null,\n"
+    "      \"other_deductions\": []\n"
+    "    },\n"
+    "    \"net_pay\": {\n"
+    "      \"final_salary_after_deductions\": null\n"
+    "    }\n"
+    "  }\n"
+    "}"
 )
 
 
@@ -106,15 +166,23 @@ def file_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def extract_text_from_pdf(path: Path) -> tuple[str, list[str]]:
+def extract_text_from_pdf(path: Path, ai_provider: str = "nvidia") -> tuple[str, list[str]]:
     warnings: list[str] = []
+    
+    if ai_provider == "nvidia" and NVIDIA_API_KEY:
+        warnings.append("Trying NVIDIA OCR API first.")
+        nvidia_text, nvidia_warnings = extract_text_with_nvidia_ocr(path)
+        warnings.extend(nvidia_warnings)
+        if nvidia_text:
+            return nvidia_text, warnings
+
     text, text_warnings = extract_embedded_pdf_text(path)
     warnings.extend(text_warnings)
     if text:
         return text, warnings
 
     warnings.append("No embedded PDF text found. Trying local AI PDF analysis.")
-    ai_text, ai_warnings = extract_text_with_local_ai(path)
+    ai_text, ai_warnings = extract_text_with_local_ai(path, ai_provider)
     warnings.extend(ai_warnings)
     if ai_text:
         return ai_text, warnings
@@ -151,10 +219,25 @@ def extract_embedded_pdf_text(path: Path) -> tuple[str, list[str]]:
     return "", warnings
 
 
-def extract_text_with_local_ai(path: Path) -> tuple[str, list[str]]:
+def extract_text_with_local_ai(path: Path, ai_provider: str = "nvidia") -> tuple[str, list[str]]:
     warnings: list[str] = []
-    if not LOCAL_AI_BASE_URLS:
-        return "", ["Local AI analysis is disabled because LOCAL_AI_BASE_URL is empty."]
+
+    # Map variables based on the provider selection
+    if ai_provider == "nvidia":
+        api_urls = ["https://integrate.api.nvidia.com/v1"]
+        api_key = NVIDIA_API_KEY
+        model_name = "meta/llama-3.3-70b-instruct"
+    elif ai_provider == "google":
+        api_urls = ["https://integrate.api.nvidia.com/v1"]
+        api_key = GOOGLE_API_KEY
+        model_name = "google/gemma-4-31b-it"
+    else:  # local AI
+        api_urls = LOCAL_AI_BASE_URLS
+        api_key = LOCAL_AI_API_KEY
+        model_name = LOCAL_AI_MODEL
+
+    if not api_urls:
+        return "", [f"AI analysis is disabled because base URL is empty for provider: {ai_provider}."]
 
     image_urls = render_pdf_pages_for_ai(path, warnings)
     if not image_urls:
@@ -169,31 +252,144 @@ def extract_text_with_local_ai(path: Path) -> tuple[str, list[str]]:
     )
     content = [{"type": "text", "text": prompt}]
     content.extend({"type": "image_url", "image_url": {"url": image_url}} for image_url in image_urls)
+    
     payload = {
-        "model": LOCAL_AI_MODEL,
+        "model": model_name,
         "messages": [{"role": "user", "content": content}],
-        "temperature": 0,
-        "max_tokens": 900,
+        "temperature": 1.0 if "gemma-4" in model_name else 0,
+        "max_tokens": 8192 if "gemma-4" in model_name else 900,
     }
+    
+    if "gemma-4" in model_name:
+        payload["top_p"] = 0.95
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
 
-    for base_url in LOCAL_AI_BASE_URLS:
+    for base_url in api_urls:
         try:
-            response = post_local_ai_json(f"{base_url}/chat/completions", payload)
-            message = response["choices"][0]["message"]["content"]
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            
+            request = urllib.request.Request(
+                f"{base_url}/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=LOCAL_AI_TIMEOUT_SECONDS) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                
+            message = res_data["choices"][0]["message"]["content"]
             data = parse_ai_json(message)
             if data:
-                warnings.append(f"Local AI analysis used model {LOCAL_AI_MODEL}.")
+                is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
+                provider = "Cloud" if is_cloud else "Local"
+                warnings.append(f"{provider} AI analysis used model {model_name}.")
                 return ai_data_to_text(data), warnings
-            warnings.append("Local AI returned a response, but no JSON could be parsed.")
+            warnings.append("AI returned a response, but no JSON could be parsed.")
         except Exception as exc:  # noqa: BLE001
-            warnings.append(f"Local AI analysis failed at {base_url}: {exc}")
+            is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
+            provider = "Cloud" if is_cloud else "Local"
+            warnings.append(f"{provider} AI analysis failed at {base_url}: {exc}")
     return "", warnings
 
 
-def extract_structured_data_with_local_ai(path: Path, embedded_text: str = "") -> tuple[dict, list[str]]:
+def extract_text_with_nvidia_ocr(path: Path) -> tuple[str, list[str]]:
     warnings: list[str] = []
-    if not LOCAL_AI_BASE_URLS:
-        return {}, ["Local AI analysis is disabled because LOCAL_AI_BASE_URL is empty."]
+    if not NVIDIA_API_KEY:
+        return "", ["NVIDIA OCR API key is empty."]
+
+    # Render PDF pages to images
+    img_bytes_list = []
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(path)
+        pages_to_ocr = min(len(doc), LOCAL_AI_RENDERED_PAGES)
+        for page_idx in range(pages_to_ocr):
+            page = doc.load_page(page_idx)
+            pix = page.get_pixmap(dpi=150)
+            img_bytes_list.append(pix.tobytes("png"))
+    except ImportError:
+        # Fall back to pdf2image
+        try:
+            from pdf2image import convert_from_path
+            import io
+            images = convert_from_path(str(path), dpi=150, first_page=1, last_page=LOCAL_AI_RENDERED_PAGES)
+            for img in images:
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format="PNG")
+                img_bytes_list.append(img_byte_arr.getvalue())
+        except Exception as exc:  # noqa: BLE001
+            return "", [f"NVIDIA OCR failed: PyMuPDF import failed and pdf2image fallback could not render. Details: {exc}"]
+    except Exception as exc:  # noqa: BLE001
+        return "", [f"NVIDIA OCR failed to load PDF pages. Details: {exc}"]
+
+    if not img_bytes_list:
+        return "", ["No pages rendered for NVIDIA OCR."]
+
+    all_texts = []
+    for img_bytes in img_bytes_list:
+        try:
+            base64_image = base64.b64encode(img_bytes).decode("ascii")
+            payload = {
+                "input": [
+                    {
+                        "type": "image_url",
+                        "url": f"data:image/png;base64,{base64_image}"
+                    }
+                ]
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {NVIDIA_API_KEY}",
+                "Accept": "application/json"
+            }
+            req = urllib.request.Request(
+                NVIDIA_OCR_API_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=60) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                for item in result.get("data", []):
+                    for detection in item.get("text_detections", []):
+                        text = detection.get("text_prediction", {}).get("text", "")
+                        if text:
+                            all_texts.append(text)
+        except urllib.error.HTTPError as he:
+            err_msg = he.read().decode("utf-8", errors="replace")
+            warnings.append(f"NVIDIA OCR API HTTP Error {he.code}: {err_msg[:200]}")
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"NVIDIA OCR API error: {str(e)[:200]}")
+
+    full_text = "\n".join(all_texts)
+    if full_text:
+        warnings.append("Text was successfully extracted using NVIDIA OCR API.")
+        return full_text, warnings
+    return "", warnings
+
+
+
+def extract_structured_data_with_ai(path: Path, embedded_text: str = "", ai_provider: str = "nvidia") -> tuple[dict, list[str]]:
+    warnings: list[str] = []
+
+    # Map variables based on the provider selection
+    if ai_provider == "nvidia":
+        api_urls = ["https://integrate.api.nvidia.com/v1"]
+        api_key = NVIDIA_API_KEY
+        model_name = "meta/llama-3.3-70b-instruct"
+    elif ai_provider == "google":
+        api_urls = ["https://integrate.api.nvidia.com/v1"]
+        api_key = GOOGLE_API_KEY
+        model_name = "google/gemma-4-31b-it"
+    else:  # local AI
+        api_urls = LOCAL_AI_BASE_URLS
+        api_key = LOCAL_AI_API_KEY
+        model_name = LOCAL_AI_MODEL
+
+    if not api_urls:
+        return {}, [f"AI analysis is disabled because base URL is empty for provider: {ai_provider}."]
 
     image_urls = [] if embedded_text else render_pdf_pages_for_ai(path, warnings)
     if not embedded_text and not image_urls:
@@ -204,24 +400,45 @@ def extract_structured_data_with_local_ai(path: Path, embedded_text: str = "") -
         prompt += "\n\nPDF text extracted without OCR. Parse this document text:\n" + embedded_text[:12000]
     content = [{"type": "text", "text": prompt}]
     content.extend({"type": "image_url", "image_url": {"url": image_url}} for image_url in image_urls)
+    
     payload = {
-        "model": LOCAL_AI_MODEL,
+        "model": model_name,
         "messages": [{"role": "user", "content": content}],
-        "temperature": 0,
-        "max_tokens": 1800,
+        "temperature": 1.0 if "gemma-4" in model_name else 0,
+        "max_tokens": 8192 if "gemma-4" in model_name else 1800,
     }
+    
+    if "gemma-4" in model_name:
+        payload["top_p"] = 0.95
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
 
-    for base_url in LOCAL_AI_BASE_URLS:
+    for base_url in api_urls:
         try:
-            response = post_local_ai_json(f"{base_url}/chat/completions", payload)
-            message = response["choices"][0]["message"]["content"]
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            
+            request = urllib.request.Request(
+                f"{base_url}/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=LOCAL_AI_TIMEOUT_SECONDS) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                
+            message = res_data["choices"][0]["message"]["content"]
             data = parse_ai_json(message)
             if data:
-                warnings.append(f"Local AI analysis used model {LOCAL_AI_MODEL}.")
+                is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
+                provider = "Cloud" if is_cloud else "Local"
+                warnings.append(f"{provider} AI analysis used model {model_name}.")
                 return data, warnings
-            warnings.append("Local AI returned a response, but no JSON could be parsed.")
+            warnings.append("AI returned a response, but no JSON could be parsed.")
         except Exception as exc:  # noqa: BLE001
-            warnings.append(f"Local AI analysis failed at {base_url}: {exc}")
+            is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
+            provider = "Cloud" if is_cloud else "Local"
+            warnings.append(f"{provider} AI analysis failed at {base_url}: {exc}")
     return {}, warnings
 
 
@@ -463,7 +680,7 @@ def extract_currency_amounts_from_line(line: str) -> list[float]:
 
 def find_amount(text: str, key: str) -> float:
     labels_by_key = {
-        "gross_amount": ["gross pay", "gross salary", "total earnings", "total earning"],
+        "gross_amount": ["gross pay", "gross salary", "gross earnings", "gross earning", "total earnings", "total earning"],
         "net_amount": ["total net pay", "a.net salary", "net salary", "net pay", "net payable"],
         "tds_amount": ["tds", "income tax", "tax deducted"],
         "deductions_amount": ["total deductions", "total deduction"],
@@ -486,9 +703,9 @@ def find_amount(text: str, key: str) -> float:
         if any(label in normalized for label in labels_by_key.get(key, [])):
             amounts = extract_amounts_from_line(line)
             if amounts:
-                if key == "gross_amount" and "total earning" in normalized and "total deduction" in normalized:
+                if key == "gross_amount" and any(e in normalized for e in ["earning", "salary", "pay"]) and "deduction" in normalized:
                     return amounts[0]
-                if key == "deductions_amount" and "total earning" in normalized and "total deduction" in normalized:
+                if key == "deductions_amount" and any(e in normalized for e in ["earning", "salary", "pay"]) and "deduction" in normalized:
                     return amounts[-1]
                 return amounts[-1]
 
@@ -626,14 +843,31 @@ def find_payer(text: str) -> str | None:
     return None
 
 
-def extract_financial_fields(path: Path) -> ExtractionResult:
-    embedded_text, embedded_warnings = extract_embedded_pdf_text(path)
-    ai_data, ai_warnings = extract_structured_data_with_local_ai(path, embedded_text)
+def extract_financial_fields(path: Path, ai_provider: str = "nvidia") -> ExtractionResult:
+    # Try NVIDIA OCR first if key is present and provider is nvidia
+    nvidia_text = ""
+    nvidia_warnings = []
+    if ai_provider == "nvidia" and NVIDIA_API_KEY:
+        nvidia_text, nvidia_warnings = extract_text_with_nvidia_ocr(path)
+
+    if nvidia_text:
+        embedded_text = nvidia_text
+        embedded_warnings = nvidia_warnings
+    else:
+        embedded_text, embedded_warnings = extract_embedded_pdf_text(path)
+        if ai_provider == "nvidia" and NVIDIA_API_KEY:
+            embedded_warnings = [*nvidia_warnings, *embedded_warnings]
+
+    ai_data, ai_warnings = extract_structured_data_with_ai(path, embedded_text, ai_provider)
     if ai_data:
         return extraction_result_from_ai_data(ai_data, [*embedded_warnings, *ai_warnings], embedded_text)
 
-    text, warnings = extract_text_from_pdf(path)
-    warnings = [*embedded_warnings, *ai_warnings, *warnings]
+    if embedded_text:
+        text = embedded_text
+        warnings = [*embedded_warnings, *ai_warnings]
+    else:
+        text, warnings = extract_text_from_pdf(path, ai_provider)
+        warnings = [*embedded_warnings, *ai_warnings, *warnings]
     document_type = classify_document(text)
     invoice_amount = find_amount(text, "invoice_amount")
     gross_amount = find_amount(text, "gross_amount") or invoice_amount

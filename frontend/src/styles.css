@@ -337,10 +337,15 @@ h1 {
   border-radius: 12px;
   border: 1.5px solid var(--app-border);
   background-color: var(--app-surface-2);
-  color: var(--app-text);
+  color: var(--app-text) !important;
   padding: 10px 16px;
   transition: all 0.25s ease;
   font-weight: 500;
+}
+
+.form-control::placeholder {
+  color: var(--app-muted) !important;
+  opacity: 0.65;
 }
 
 .form-select:focus,
