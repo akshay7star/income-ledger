@@ -114,7 +114,11 @@ def users_create(payload: UserCreate) -> dict:
 
 
 @app.post("/api/documents/upload")
-def upload_document(file: UploadFile = File(...), user_id: int | None = Form(None)) -> dict:
+def upload_document(
+    file: UploadFile = File(...),
+    user_id: int | None = Form(None),
+    ai_provider: str | None = Form(None)
+) -> dict:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
@@ -130,7 +134,7 @@ def upload_document(file: UploadFile = File(...), user_id: int | None = Form(Non
     else:
         temp_path.unlink(missing_ok=True)
 
-    extraction = extract_financial_fields(stored_path).to_dict()
+    extraction = extract_financial_fields(stored_path, ai_provider or "nvidia").to_dict()
     selected_user = get_user(user_id) if user_id else None
     if user_id and not selected_user:
         raise HTTPException(status_code=404, detail="Selected user was not found.")
