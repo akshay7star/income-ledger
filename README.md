@@ -70,24 +70,30 @@ Launch the entire suite on Windows with a single command:
 
 ---
 
-## 🤖 Custom AI Model Configuration
+## 🤖 Local AI Model Configuration
 
 By default, the application connects to a local instance of **LM Studio** running on `http://127.0.0.1:1234/v1` using `google/gemma-4-e4b`.
 
-If you wish to configure a different local host, switch to a cloud service (e.g. OpenAI, Groq, DeepSeek, or any OpenAI-compatible provider), you can define these settings in a `.env` file in the root of the project.
+The extraction pipeline is local-only:
+
+1. Local Python parser reads embedded PDF text, PyMuPDF fallback text, and optional local OCR.
+2. If the local parser cannot confidently validate the document, the app sends the document to your locally hosted LM Studio model.
+3. If LM Studio also cannot produce usable fields, the document opens in manual review.
+
+Cloud AI providers have intentionally been removed from the app.
 
 ### Setting up a `.env` file
 Create a file named `.env` in the project root directory and add the following keys as needed:
 
 ```env
-# URL for your AI provider (comma-separated if using multiple endpoints for fallbacks)
-LOCAL_AI_BASE_URL=https://api.openai.com/v1
+# URL for your local LM Studio server (comma-separated if using multiple local fallbacks)
+LOCAL_AI_BASE_URL=http://127.0.0.1:1234/v1
 
-# The API key required by your cloud provider (e.g., OpenAI, Groq, etc.)
-LOCAL_AI_API_KEY=your-actual-api-key-here
+# Optional local server API key, if your LM Studio setup requires one
+LOCAL_AI_API_KEY=lm-studio
 
-# The model name to target (e.g., gpt-4o-mini, llama3-70b-8192, etc.)
-LOCAL_AI_MODEL=gpt-4o-mini
+# The local LM Studio model name
+LOCAL_AI_MODEL=google/gemma-4-e4b
 
 # Timeout for API requests in seconds (default is 120)
 LOCAL_AI_TIMEOUT_SECONDS=120
@@ -100,7 +106,7 @@ LOCAL_AI_RENDERED_PAGES=1
 
 ## ⚠️ Notes & OCR Setup
 
-*   **Privacy notice**: If you configure a cloud AI endpoint (like OpenAI or Groq) in your `.env` file, the PDF document images/text will be sent to that provider for analysis. If you keep the default local settings (LM Studio), no data ever leaves your computer.
+*   **Privacy notice**: The app is intended to use only local Python extraction and a locally hosted LM Studio model. Do not configure cloud AI endpoints for this project.
 *   **Optional OCR**: To process scanned documents:
     1.  Install **Tesseract OCR** on your PC and add its path to your system environment variables.
     2.  Install **Poppler** (for PDF-to-image conversion) and add its `/bin` directory to your system environment variables.

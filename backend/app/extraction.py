@@ -21,11 +21,11 @@ AMOUNT_PATTERNS = {
         r"(?:total\s+net\s+pay(?:\(a\+b\))?|a\.?\s*net\s+salary|net\s+(?:pay|salary|amount|payable))\D{0,80}([\d,]+(?:\.\d{1,2})?)",
     ],
     "tds_amount": [r"(?:tds|income\s*tax|tax\s+deducted)\D{0,80}([\d,]+(?:\.\d{1,2})?)"],
-    "deductions_amount": [r"(?:total\s+deductions|total\s+deduction|deductions)\D{0,80}([\d,]+(?:\.\d{1,2})?)"],
+    "deductions_amount": [r"(?:total\s+deductions|total\s+deduction)\D{0,80}([\d,]+(?:\.\d{1,2})?)"],
     "invoice_amount": [r"(?:invoice\s+amount|total\s+amount|amount\s+due)\D{0,80}([\d,]+(?:\.\d{1,2})?)"],
 }
 
-AMOUNT_RE = re.compile(r"[\d,]+(?:\.\d{1,2})?")
+AMOUNT_RE = re.compile(r"\d[\d,]*(?:\.\d{1,2})?")
 CURRENCY_AMOUNT_RE = re.compile(r"\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?")
 
 def _load_env_file():
@@ -61,9 +61,6 @@ LOCAL_AI_BASE_URLS = [
     if item.strip()
 ]
 LOCAL_AI_RENDERED_PAGES = max(1, int(os.getenv("LOCAL_AI_RENDERED_PAGES", "1")))
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
-NVIDIA_OCR_API_URL = os.getenv("NVIDIA_OCR_API_URL", "https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v1")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 LOCAL_AI_EXTRACTION_PROMPT = (
     "You are an expert Indian Financial Data Extractor. Your task is to analyze the provided financial document (Invoice, Payslip, or Receipt) and return a strictly structured JSON response.\n\n"
@@ -166,15 +163,8 @@ def file_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def extract_text_from_pdf(path: Path, ai_provider: str = "nvidia") -> tuple[str, list[str]]:
+def extract_text_from_pdf(path: Path, ai_provider: str = "local") -> tuple[str, list[str]]:
     warnings: list[str] = []
-    
-    if ai_provider == "nvidia" and NVIDIA_API_KEY:
-        warnings.append("Trying NVIDIA OCR API first.")
-        nvidia_text, nvidia_warnings = extract_text_with_nvidia_ocr(path)
-        warnings.extend(nvidia_warnings)
-        if nvidia_text:
-            return nvidia_text, warnings
 
     text, text_warnings = extract_embedded_pdf_text(path)
     warnings.extend(text_warnings)
@@ -216,28 +206,27 @@ def extract_embedded_pdf_text(path: Path) -> tuple[str, list[str]]:
             return text, warnings
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"PDF text extraction failed: {exc}")
+    try:
+        import fitz
+
+        with fitz.open(path) as document:
+            text = "\n".join(page.get_text("text") or "" for page in document).strip()
+        if text:
+            warnings.append("Text was extracted using PyMuPDF fallback.")
+            return text, warnings
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"PyMuPDF text extraction failed: {exc}")
     return "", warnings
 
 
-def extract_text_with_local_ai(path: Path, ai_provider: str = "nvidia") -> tuple[str, list[str]]:
+def extract_text_with_local_ai(path: Path, ai_provider: str = "local") -> tuple[str, list[str]]:
     warnings: list[str] = []
-
-    # Map variables based on the provider selection
-    if ai_provider == "nvidia":
-        api_urls = ["https://integrate.api.nvidia.com/v1"]
-        api_key = NVIDIA_API_KEY
-        model_name = "meta/llama-3.3-70b-instruct"
-    elif ai_provider == "google":
-        api_urls = ["https://integrate.api.nvidia.com/v1"]
-        api_key = GOOGLE_API_KEY
-        model_name = "google/gemma-4-31b-it"
-    else:  # local AI
-        api_urls = LOCAL_AI_BASE_URLS
-        api_key = LOCAL_AI_API_KEY
-        model_name = LOCAL_AI_MODEL
+    api_urls = LOCAL_AI_BASE_URLS
+    api_key = LOCAL_AI_API_KEY
+    model_name = LOCAL_AI_MODEL
 
     if not api_urls:
-        return "", [f"AI analysis is disabled because base URL is empty for provider: {ai_provider}."]
+        return "", ["Local AI analysis is disabled because LOCAL_AI_BASE_URL is empty."]
 
     image_urls = render_pdf_pages_for_ai(path, warnings)
     if not image_urls:
@@ -282,114 +271,22 @@ def extract_text_with_local_ai(path: Path, ai_provider: str = "nvidia") -> tuple
             message = res_data["choices"][0]["message"]["content"]
             data = parse_ai_json(message)
             if data:
-                is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
-                provider = "Cloud" if is_cloud else "Local"
-                warnings.append(f"{provider} AI analysis used model {model_name}.")
+                warnings.append(f"Local AI analysis used model {model_name}.")
                 return ai_data_to_text(data), warnings
             warnings.append("AI returned a response, but no JSON could be parsed.")
         except Exception as exc:  # noqa: BLE001
-            is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
-            provider = "Cloud" if is_cloud else "Local"
-            warnings.append(f"{provider} AI analysis failed at {base_url}: {exc}")
+            warnings.append(f"Local AI analysis failed at {base_url}: {exc}")
     return "", warnings
 
 
-def extract_text_with_nvidia_ocr(path: Path) -> tuple[str, list[str]]:
+def extract_structured_data_with_ai(path: Path, embedded_text: str = "", ai_provider: str = "local") -> tuple[dict, list[str]]:
     warnings: list[str] = []
-    if not NVIDIA_API_KEY:
-        return "", ["NVIDIA OCR API key is empty."]
-
-    # Render PDF pages to images
-    img_bytes_list = []
-    try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(path)
-        pages_to_ocr = min(len(doc), LOCAL_AI_RENDERED_PAGES)
-        for page_idx in range(pages_to_ocr):
-            page = doc.load_page(page_idx)
-            pix = page.get_pixmap(dpi=150)
-            img_bytes_list.append(pix.tobytes("png"))
-    except ImportError:
-        # Fall back to pdf2image
-        try:
-            from pdf2image import convert_from_path
-            import io
-            images = convert_from_path(str(path), dpi=150, first_page=1, last_page=LOCAL_AI_RENDERED_PAGES)
-            for img in images:
-                img_byte_arr = io.BytesIO()
-                img.save(img_byte_arr, format="PNG")
-                img_bytes_list.append(img_byte_arr.getvalue())
-        except Exception as exc:  # noqa: BLE001
-            return "", [f"NVIDIA OCR failed: PyMuPDF import failed and pdf2image fallback could not render. Details: {exc}"]
-    except Exception as exc:  # noqa: BLE001
-        return "", [f"NVIDIA OCR failed to load PDF pages. Details: {exc}"]
-
-    if not img_bytes_list:
-        return "", ["No pages rendered for NVIDIA OCR."]
-
-    all_texts = []
-    for img_bytes in img_bytes_list:
-        try:
-            base64_image = base64.b64encode(img_bytes).decode("ascii")
-            payload = {
-                "input": [
-                    {
-                        "type": "image_url",
-                        "url": f"data:image/png;base64,{base64_image}"
-                    }
-                ]
-            }
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {NVIDIA_API_KEY}",
-                "Accept": "application/json"
-            }
-            req = urllib.request.Request(
-                NVIDIA_OCR_API_URL,
-                data=json.dumps(payload).encode("utf-8"),
-                headers=headers,
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=60) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                for item in result.get("data", []):
-                    for detection in item.get("text_detections", []):
-                        text = detection.get("text_prediction", {}).get("text", "")
-                        if text:
-                            all_texts.append(text)
-        except urllib.error.HTTPError as he:
-            err_msg = he.read().decode("utf-8", errors="replace")
-            warnings.append(f"NVIDIA OCR API HTTP Error {he.code}: {err_msg[:200]}")
-        except Exception as e:  # noqa: BLE001
-            warnings.append(f"NVIDIA OCR API error: {str(e)[:200]}")
-
-    full_text = "\n".join(all_texts)
-    if full_text:
-        warnings.append("Text was successfully extracted using NVIDIA OCR API.")
-        return full_text, warnings
-    return "", warnings
-
-
-
-def extract_structured_data_with_ai(path: Path, embedded_text: str = "", ai_provider: str = "nvidia") -> tuple[dict, list[str]]:
-    warnings: list[str] = []
-
-    # Map variables based on the provider selection
-    if ai_provider == "nvidia":
-        api_urls = ["https://integrate.api.nvidia.com/v1"]
-        api_key = NVIDIA_API_KEY
-        model_name = "meta/llama-3.3-70b-instruct"
-    elif ai_provider == "google":
-        api_urls = ["https://integrate.api.nvidia.com/v1"]
-        api_key = GOOGLE_API_KEY
-        model_name = "google/gemma-4-31b-it"
-    else:  # local AI
-        api_urls = LOCAL_AI_BASE_URLS
-        api_key = LOCAL_AI_API_KEY
-        model_name = LOCAL_AI_MODEL
+    api_urls = LOCAL_AI_BASE_URLS
+    api_key = LOCAL_AI_API_KEY
+    model_name = LOCAL_AI_MODEL
 
     if not api_urls:
-        return {}, [f"AI analysis is disabled because base URL is empty for provider: {ai_provider}."]
+        return {}, ["Local AI analysis is disabled because LOCAL_AI_BASE_URL is empty."]
 
     image_urls = [] if embedded_text else render_pdf_pages_for_ai(path, warnings)
     if not embedded_text and not image_urls:
@@ -430,15 +327,11 @@ def extract_structured_data_with_ai(path: Path, embedded_text: str = "", ai_prov
             message = res_data["choices"][0]["message"]["content"]
             data = parse_ai_json(message)
             if data:
-                is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
-                provider = "Cloud" if is_cloud else "Local"
-                warnings.append(f"{provider} AI analysis used model {model_name}.")
+                warnings.append(f"Local AI analysis used model {model_name}.")
                 return data, warnings
             warnings.append("AI returned a response, but no JSON could be parsed.")
         except Exception as exc:  # noqa: BLE001
-            is_cloud = "127.0.0.1" not in base_url and "localhost" not in base_url
-            provider = "Cloud" if is_cloud else "Local"
-            warnings.append(f"{provider} AI analysis failed at {base_url}: {exc}")
+            warnings.append(f"Local AI analysis failed at {base_url}: {exc}")
     return {}, warnings
 
 
@@ -532,6 +425,47 @@ def coerce_float(value: object) -> float:
     return 0.0
 
 
+def find_ai_value(data: object, aliases: set[str]) -> object:
+    if isinstance(data, dict):
+        normalized = {str(key).lower().replace(" ", "_").replace("-", "_"): value for key, value in data.items()}
+        for alias in aliases:
+            if alias in normalized and normalized[alias] not in (None, ""):
+                return normalized[alias]
+        for value in data.values():
+            found = find_ai_value(value, aliases)
+            if found not in (None, ""):
+                return found
+    if isinstance(data, list):
+        for item in data:
+            found = find_ai_value(item, aliases)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def compact_ai_data(data: dict) -> dict:
+    invoice = data.get("invoice_details") if isinstance(data.get("invoice_details"), dict) else {}
+    payroll = data.get("payroll_data") if isinstance(data.get("payroll_data"), dict) else {}
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    earnings = payroll.get("earnings") if isinstance(payroll.get("earnings"), dict) else {}
+    deductions = payroll.get("deductions") if isinstance(payroll.get("deductions"), dict) else {}
+    net_pay = payroll.get("net_pay") if isinstance(payroll.get("net_pay"), dict) else {}
+    return {
+        "document_type": data.get("document_type") or data.get("source_document_type") or data.get("type") or find_ai_value(data, {"document_type", "source_document_type", "type"}),
+        "name": data.get("name") or data.get("employee_name") or payroll.get("employee_name") or invoice.get("seller_name") or find_ai_value(data, {"employee_name", "name", "seller_name", "consultant_name"}),
+        "pan": data.get("pan") or data.get("pan_number") or gstin_to_pan(invoice.get("seller_gstin")) or gstin_to_pan(invoice.get("buyer_gstin")) or find_ai_value(data, {"pan", "pan_number"}),
+        "payer": data.get("payer") or data.get("employer") or data.get("company") or data.get("company_name") or invoice.get("buyer_name") or invoice.get("seller_name") or find_ai_value(data, {"payer", "employer", "company", "company_name", "buyer_name", "client"}),
+        "record_date": data.get("record_date") or data.get("pay_date") or data.get("payment_date") or data.get("invoice_date") or metadata.get("date_issued") or find_ai_value(data, {"record_date", "pay_date", "payment_date", "invoice_date", "date_issued", "period_end_date"}),
+        "gross_amount": data.get("gross_amount") or data.get("gross_salary") or data.get("gross_pay") or data.get("gross_earnings") or data.get("total_gross") or earnings.get("gross_salary") or invoice.get("total_chargeable_value") or find_ai_value(data, {"gross_amount", "gross_salary", "gross_pay", "gross_earnings", "total_gross", "total_earnings"}),
+        "net_amount": data.get("net_amount") or data.get("net_pay") or data.get("net_salary") or data.get("net_payable") or data.get("total_net_pay") or net_pay.get("final_salary_after_deductions") or invoice.get("grand_total_amount") or find_ai_value(data, {"net_amount", "net_pay", "net_salary", "net_payable", "total_net_pay", "final_salary_after_deductions"}),
+        "tds_amount": data.get("tds_amount") or data.get("income_tax") or data.get("tds") or data.get("tax_deducted") or deductions.get("tax_tds") or find_ai_value(data, {"tds_amount", "tax_tds", "income_tax", "tds", "tax_deducted"}),
+        "deductions_amount": data.get("deductions_amount") or data.get("less_deductions") or deductions.get("other_deductions") or find_ai_value(data, {"deductions_amount", "other_deductions", "less_deductions"}),
+        "pf_amount": data.get("pf_amount") or data.get("employee_pf") or data.get("epf") or data.get("epf_contribution") or deductions.get("pf_employee") or find_ai_value(data, {"pf_amount", "pf_employee", "employee_pf", "epf", "epf_contribution"}),
+        "vpf_amount": data.get("vpf_amount") or data.get("employee_vpf") or data.get("vpf") or deductions.get("vpf_employee") or find_ai_value(data, {"vpf_amount", "vpf_employee", "employee_vpf", "vpf"}),
+        "gst_amount": data.get("gst_amount") or data.get("gst") or data.get("tax_amount") or deductions.get("gst_deduction") or find_ai_value(data, {"gst_amount", "gst", "cgst_sgst", "tax_amount"}),
+    }
+
+
 def sum_money_values(value: object) -> float:
     if value in (None, ""):
         return 0.0
@@ -561,12 +495,15 @@ def normalize_ai_document_type(value: object) -> str:
     text = str(value or "").lower()
     if "salary" in text or "payroll" in text or "pay slip" in text or "payslip" in text:
         return "salary"
-    if "invoice" in text or "receipt" in text or "payment" in text:
+    if "receipt" in text or "expense" in text or "purchase" in text:
+        return "purchase_expense"
+    if "invoice" in text or "payment" in text:
         return "freelance_invoice"
     return "unknown"
 
 
 def extraction_result_from_ai_data(data: dict, warnings: list[str], source_text: str = "") -> ExtractionResult:
+    compact = compact_ai_data(data)
     invoice = data.get("invoice_details") if isinstance(data.get("invoice_details"), dict) else {}
     payroll = data.get("payroll_data") if isinstance(data.get("payroll_data"), dict) else {}
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
@@ -574,15 +511,15 @@ def extraction_result_from_ai_data(data: dict, warnings: list[str], source_text:
     deductions = payroll.get("deductions") if isinstance(payroll.get("deductions"), dict) else {}
     net_pay = payroll.get("net_pay") if isinstance(payroll.get("net_pay"), dict) else {}
 
-    document_type = normalize_ai_document_type(data.get("source_document_type"))
-    invoice_gross = coerce_float(invoice.get("total_chargeable_value"))
-    invoice_net = coerce_float(invoice.get("grand_total_amount"))
-    salary_gross = coerce_float(earnings.get("gross_salary"))
-    salary_net = coerce_float(net_pay.get("final_salary_after_deductions"))
-    pf_amount = coerce_float(deductions.get("pf_employee"))
-    vpf_amount = coerce_float(deductions.get("vpf_employee"))
-    tds_amount = coerce_float(deductions.get("tax_tds"))
-    deductions_amount = sum_money_values(deductions.get("other_deductions"))
+    document_type = normalize_ai_document_type(compact.get("document_type"))
+    invoice_gross = coerce_float(compact.get("gross_amount")) or coerce_float(invoice.get("total_chargeable_value"))
+    invoice_net = coerce_float(compact.get("net_amount")) or coerce_float(invoice.get("grand_total_amount"))
+    salary_gross = coerce_float(compact.get("gross_amount")) or coerce_float(earnings.get("gross_salary"))
+    salary_net = coerce_float(compact.get("net_amount")) or coerce_float(net_pay.get("final_salary_after_deductions"))
+    pf_amount = coerce_float(compact.get("pf_amount")) or coerce_float(deductions.get("pf_employee"))
+    vpf_amount = coerce_float(compact.get("vpf_amount")) or coerce_float(deductions.get("vpf_employee"))
+    tds_amount = coerce_float(compact.get("tds_amount")) or coerce_float(deductions.get("tax_tds"))
+    deductions_amount = sum_money_values(compact.get("deductions_amount")) or sum_money_values(deductions.get("other_deductions"))
 
     if document_type == "unknown":
         document_type = "salary" if salary_gross or salary_net else "freelance_invoice" if invoice_gross or invoice_net else "unknown"
@@ -590,9 +527,9 @@ def extraction_result_from_ai_data(data: dict, warnings: list[str], source_text:
     if document_type == "salary":
         gross_amount = salary_gross
         net_amount = salary_net or gross_amount
-        name = first_text(payroll.get("employee_name"))
-        payer = first_text(invoice.get("seller_name"), invoice.get("buyer_name")) or find_salary_employer(source_text)
-        record_date = normalize_date(first_text(payroll.get("period_end_date"), payroll.get("period_start_date"), metadata.get("date_issued"), metadata.get("billable_period"))) or normalize_date(find_date(source_text))
+        name = first_text(compact.get("name"), payroll.get("employee_name"))
+        payer = first_text(compact.get("payer"), invoice.get("seller_name"), invoice.get("buyer_name")) or find_salary_employer(source_text)
+        record_date = normalize_date(first_text(compact.get("record_date"), payroll.get("period_end_date"), payroll.get("period_start_date"), metadata.get("date_issued"), metadata.get("billable_period"), data.get("extraction_date"))) or normalize_date(find_date(source_text))
         if source_text:
             gross_amount = gross_amount or find_amount(source_text, "gross_amount")
             net_amount = net_amount or find_amount(source_text, "net_amount") or gross_amount
@@ -601,24 +538,34 @@ def extraction_result_from_ai_data(data: dict, warnings: list[str], source_text:
             vpf_amount = vpf_amount or find_amount(source_text, "vpf_amount")
             total_deductions = find_amount(source_text, "deductions_amount")
             if not deductions_amount and total_deductions:
-                deductions_amount = round(max(0.0, total_deductions - pf_amount - vpf_amount - tds_amount), 2)
+                lowered_text = source_text.lower()
+                if "less: dedns" in lowered_text or "less dedns" in lowered_text:
+                    deductions_amount = round(max(0.0, total_deductions - pf_amount - vpf_amount), 2)
+                else:
+                    deductions_amount = round(max(0.0, total_deductions - pf_amount - vpf_amount - tds_amount), 2)
+    elif document_type == "purchase_expense":
+        gross_amount = invoice_gross or invoice_net
+        net_amount = invoice_net or gross_amount
+        name = first_text(compact.get("name"), invoice.get("seller_name"))
+        payer = first_text(compact.get("payer"), invoice.get("buyer_name"))
+        record_date = normalize_date(first_text(compact.get("record_date"), metadata.get("date_issued"), metadata.get("billable_period"), data.get("extraction_date")))
     else:
         gross_amount = invoice_gross or invoice_net
         net_amount = invoice_net or gross_amount
-        name = first_text(invoice.get("seller_name"))
-        payer = first_text(invoice.get("buyer_name"))
-        record_date = normalize_date(first_text(metadata.get("date_issued"), metadata.get("billable_period"), data.get("extraction_date")))
+        name = first_text(compact.get("name"), invoice.get("seller_name"))
+        payer = first_text(compact.get("payer"), invoice.get("buyer_name"))
+        record_date = normalize_date(first_text(compact.get("record_date"), metadata.get("date_issued"), metadata.get("billable_period"), data.get("extraction_date")))
 
-    gst_deduction = coerce_float(deductions.get("gst_deduction"))
+    gst_deduction = coerce_float(compact.get("gst_amount")) or coerce_float(deductions.get("gst_deduction"))
     taxation = invoice.get("taxation") if isinstance(invoice.get("taxation"), dict) else {}
     cgst = taxation.get("cgst") if isinstance(taxation.get("cgst"), dict) else {}
     sgst = taxation.get("sgst_or_utgst") if isinstance(taxation.get("sgst_or_utgst"), dict) else {}
-    gst_amount = coerce_float(cgst.get("amount")) + coerce_float(sgst.get("amount"))
-    if document_type == "freelance_invoice" and gst_amount == 0 and net_amount > gross_amount:
+    gst_amount = gst_deduction or coerce_float(cgst.get("amount")) + coerce_float(sgst.get("amount"))
+    if document_type in ("freelance_invoice", "purchase_expense") and gst_amount == 0 and net_amount > gross_amount:
         gst_amount = round(net_amount - gross_amount, 2)
     if document_type == "freelance_invoice" and tds_amount == 0 and gross_amount > 0:
         tds_amount = round(gross_amount * 0.10, 2)
-    pan = gstin_to_pan(invoice.get("seller_gstin")) or gstin_to_pan(invoice.get("buyer_gstin")) or find_pan(source_text)
+    pan = first_text(compact.get("pan")) or gstin_to_pan(invoice.get("seller_gstin")) or gstin_to_pan(invoice.get("buyer_gstin")) or find_pan(source_text)
 
     confidence = 0.55
     confidence += 0.15 if document_type != "unknown" else 0
@@ -631,6 +578,11 @@ def extraction_result_from_ai_data(data: dict, warnings: list[str], source_text:
         warnings.append("Gross amount could not be extracted from the AI response.")
     if document_type == "unknown":
         warnings.append("AI could not identify the document type confidently.")
+
+    # Classify category and construct final JSON
+    if document_type == "purchase_expense":
+        data["category"] = classify_expense_category(source_text)
+        data["notes"] = f"Vendor: {name or 'Unknown'}"
 
     extracted_text = json.dumps(data, ensure_ascii=True, indent=2)
     return ExtractionResult(
@@ -654,10 +606,15 @@ def extraction_result_from_ai_data(data: dict, warnings: list[str], source_text:
 
 def classify_document(text: str) -> str:
     lowered = text.lower()
-    salary_score = sum(token in lowered for token in ["salary", "payslip", "pay slip", "employee", "gross pay", "net pay"])
-    invoice_score = sum(token in lowered for token in ["invoice", "bill to", "client", "amount due", "freelance", "consulting"])
-    if salary_score >= 2 and salary_score >= invoice_score:
+    salary_score = sum(token in lowered for token in ["salary", "payslip", "pay slip", "employee", "gross pay", "net pay", "provident fund", "pf contribution"])
+    invoice_score = sum(token in lowered for token in ["invoice", "bill to", "buyer", "client", "amount due", "freelance", "consulting", "professional charges"])
+    expense_score = sum(token in lowered for token in ["receipt", "payment receipt", "cash memo", "expense", "vendor", "sold by", "gstin", "igst", "cgst"])
+    if salary_score >= 2 and salary_score >= invoice_score and salary_score >= expense_score:
         return "salary"
+    if invoice_score >= 2 and any(token in lowered for token in ["bill to", "buyer", "client", "professional charges", "consulting"]):
+        return "freelance_invoice"
+    if expense_score >= 2 and expense_score >= invoice_score:
+        return "purchase_expense"
     if invoice_score >= 2:
         return "freelance_invoice"
     return "unknown"
@@ -678,17 +635,74 @@ def extract_currency_amounts_from_line(line: str) -> list[float]:
     return [parse_amount(match) for match in matches]
 
 
+def amounts_near_label(lines: list[str], index: int) -> list[float]:
+    amounts: list[float] = []
+    for nearby in lines[index:index + 3]:
+        amounts.extend(extract_amounts_from_line(nearby))
+        if amounts:
+            break
+    return amounts
+
+
 def find_amount(text: str, key: str) -> float:
+    # Handle GST sum logic
+    if key == "gst_amount":
+        total_gst = 0.0
+        cgst_val = 0.0
+        sgst_val = 0.0
+        igst_val = 0.0
+        for line in text.splitlines():
+            normalized = line.lower()
+            amounts = extract_amounts_from_line(line)
+            if not amounts:
+                continue
+            if "cgst" in normalized:
+                cgst_val = max(amounts)
+            elif "sgst" in normalized:
+                sgst_val = max(amounts)
+            elif "igst" in normalized:
+                igst_val = max(amounts)
+            elif "gst" in normalized or "tax" in normalized:
+                if not total_gst:
+                    total_gst = max(amounts)
+        extracted_gst = cgst_val + sgst_val + igst_val
+        if extracted_gst > 0:
+            return round(extracted_gst, 2)
+        if total_gst > 0:
+            return round(total_gst, 2)
+
     labels_by_key = {
-        "gross_amount": ["gross pay", "gross salary", "gross earnings", "gross earning", "total earnings", "total earning"],
-        "net_amount": ["total net pay", "a.net salary", "net salary", "net pay", "net payable"],
-        "tds_amount": ["tds", "income tax", "tax deducted"],
-        "deductions_amount": ["total deductions", "total deduction"],
-        "pf_amount": ["ee pf contribution", "employee pf contribution", "provident fund", "pf contribution"],
-        "vpf_amount": ["ee vpf contribution", "employee vpf contribution", "voluntary provident fund", "vpf contribution"],
-        "invoice_amount": ["invoice amount", "total amount", "amount due"],
+        "gross_amount": ["gross pay", "gross salary", "gross earnings", "gross earning", "total gross", "total earnings", "total earning", "subtotal", "sub total", "taxable value", "chargeable value", "professional charges", "professional fees", "basic amount"],
+        "net_amount": ["total net pay", "a.net salary", "net salary", "net pay", "net payable", "grand total", "total amount paid", "amount paid", "total amount", "net amount", "total payable", "payable amount", "amount payable"],
+        "tds_amount": ["tds", "income tax", "tax deducted", "tax deduction"],
+        "deductions_amount": ["total deductions", "total deduction", "deductions total", "less: dedns", "less dedns"],
+        "pf_amount": ["ee pf contribution", "ee pf contribut", "employee pf contribution", "provident fund", "pf contribution"],
+        "vpf_amount": ["ee vpf contribution", "ee vpf contribu", "employee vpf contribution", "voluntary provident fund", "vpf contribution"],
+        "invoice_amount": ["invoice amount", "grand total", "total amount", "amount due", "amount payable", "total payable", "total amount paid"],
+        "gst_amount": ["gst", "cgst", "sgst", "igst", "tax amount", "tax total", "gst amount", "service tax"],
     }
-    for line in text.splitlines():
+    lines = text.splitlines()
+    if key == "net_amount":
+        for index, line in enumerate(lines):
+            normalized = re.sub(r"\s+", " ", line.lower())
+            if "gross earnings" in normalized and "total deductions" in normalized and "-" in normalized:
+                amounts = extract_amounts_from_line(line)
+                if amounts:
+                    return amounts[-1]
+            if "total net pay" in normalized and not extract_amounts_from_line(line) and index > 0:
+                previous_amounts = extract_amounts_from_line(lines[index - 1])
+                if len(previous_amounts) == 1:
+                    return previous_amounts[0]
+
+    if key == "deductions_amount":
+        for line in lines:
+            normalized = re.sub(r"\s+", " ", line.lower())
+            if "total deductions" in normalized or "less: dedns" in normalized or "less dedns" in normalized:
+                amounts = extract_amounts_from_line(line)
+                if amounts:
+                    return amounts[-1]
+
+    for index, line in enumerate(lines):
         normalized = re.sub(r"\s+", " ", line.lower())
         if key == "pf_amount" and "vpf" in normalized:
             continue
@@ -701,7 +715,7 @@ def find_amount(text: str, key: str) -> float:
             if len(amounts) == 1:
                 return amounts[0]
         if any(label in normalized for label in labels_by_key.get(key, [])):
-            amounts = extract_amounts_from_line(line)
+            amounts = amounts_near_label(lines, index)
             if amounts:
                 if key == "gross_amount" and any(e in normalized for e in ["earning", "salary", "pay"]) and "deduction" in normalized:
                     return amounts[0]
@@ -723,6 +737,15 @@ def find_pan(text: str) -> str | None:
 
 def find_date(text: str) -> str | None:
     lines = [line.strip() for line in text.splitlines()]
+    label_patterns = [
+        r"\b(?:pay\s+date|payment\s+date|invoice\s+date|date\s+issued|issue\s+date|bill\s+date)\s*[:\-]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
+        r"\b(?:pay\s+date|payment\s+date|invoice\s+date|date\s+issued|issue\s+date|bill\s+date)\s*[:\-]?\s*(\d{1,2}[-/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/]\d{2,4})",
+        r"\b(?:pay\s+date|payment\s+date|invoice\s+date|date\s+issued|issue\s+date|bill\s+date)\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
+    ]
+    for pattern in label_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
     for index, line in enumerate(lines[:-1]):
         if line.lower() == "dated":
             next_line = lines[index + 1]
@@ -759,7 +782,7 @@ def normalize_date(value: str | None) -> str | None:
 
 def find_named_value(text: str, labels: list[str]) -> str | None:
     for label in labels:
-        pattern = rf"{label}\s*[:\-]\s*([A-Za-z][A-Za-z .&]+?)(?:\s{{2,}}|[|]|\n|$)"
+        pattern = rf"{label}\s*[:\-]?\s*([A-Za-z][A-Za-z .&]+?)(?:\s{{2,}}|[|]|\n|$)"
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             return match.group(1).strip()[:120]
@@ -775,7 +798,7 @@ def next_meaningful_line(lines: list[str], start_index: int) -> str | None:
 
 
 def find_salary_employer(text: str) -> str | None:
-    lines = [line.strip(" |") for line in text.splitlines()]
+    lines = [line.strip(" |") for line in text.splitlines() if line.strip(" |:")]
     skip_tokens = [
         "payslip",
         "pay slip",
@@ -787,12 +810,14 @@ def find_salary_employer(text: str) -> str | None:
         "global id",
         "confidential",
     ]
-    for line in lines[:12]:
+    for line in lines[:25]:
         cleaned = re.sub(r"\s+", " ", line).strip()
         if not cleaned or len(cleaned) < 3:
             continue
         lowered = cleaned.lower()
         if any(token in lowered for token in skip_tokens):
+            continue
+        if "contribution" in lowered or "benefit" in lowered:
             continue
         if any(token in lowered for token in ["pvt", "private", "limited", "solutions", "software", "edge", "technologies"]):
             return cleaned[:120]
@@ -806,6 +831,8 @@ def find_invoice_seller(text: str) -> str | None:
     for index, line in enumerate(lines[:-1]):
         if "tax invoice" in line.lower():
             return next_meaningful_line(lines, index + 1)
+        if line.lower() == "invoice":
+            return next_meaningful_line(lines, index + 1)
     return None
 
 
@@ -816,6 +843,8 @@ def find_invoice_buyer(text: str) -> str | None:
         if "buyer" in lowered and "bill to" in lowered:
             return next_meaningful_line(lines, index + 1)
         if "bill to" in lowered:
+            return next_meaningful_line(lines, index + 1)
+        if lowered == "buyer":
             return next_meaningful_line(lines, index + 1)
     return None
 
@@ -843,81 +872,260 @@ def find_payer(text: str) -> str | None:
     return None
 
 
-def extract_financial_fields(path: Path, ai_provider: str = "nvidia") -> ExtractionResult:
-    # Try NVIDIA OCR first if key is present and provider is nvidia
-    nvidia_text = ""
-    nvidia_warnings = []
-    if ai_provider == "nvidia" and NVIDIA_API_KEY:
-        nvidia_text, nvidia_warnings = extract_text_with_nvidia_ocr(path)
+def classify_expense_category(text: str) -> str:
+    lowered = text.lower()
+    keywords = {
+        "Travel": [r"\bcab\b", r"\btaxi\b", r"\buber\b", r"\bola\b", r"\bflight\b", r"\bindigo\b", r"\bair\b", r"\brailway\b", r"\birctc\b", r"\bhotel\b", r"\bstay\b", r"\btravel\b", r"\bconvoy\b", r"\bpetrol\b", r"\bfuel\b"],
+        "Software": [r"\baws\b", r"\bazure\b", r"\bgithub\b", r"\bjetbrains\b", r"\bzoom\b", r"\bgoogle cloud\b", r"\bopenai\b", r"\bdigitalocean\b", r"\bsubscription\b", r"\bsoftware\b", r"\bsaas\b", r"\bcloud\b", r"\bslack\b", r"\bfigma\b", r"\bdomain\b", r"\bhosting\b"],
+        "Hardware": [r"\bapple\b", r"\bdell\b", r"\bhp\b", r"\blenovo\b", r"\blaptop\b", r"\bkeyboard\b", r"\bmonitor\b", r"\bmouse\b", r"\bhardware\b", r"\bcroma\b", r"\breliance digital\b", r"\bcharger\b", r"\bssd\b", r"\bram\b"],
+        "Utilities": [r"\belectricity\b", r"\bbescom\b", r"\bpower\b", r"\bbroadband\b", r"\bairtel\b", r"\bjio\b", r"\binternet\b", r"\bwater\b", r"\bgas\b", r"\brecharge\b", r"\bphone bill\b"],
+        "Office Supplies": [r"\bstationery\b", r"\bpaper\b", r"\bprinter\b", r"\bpen\b", r"\bsupplies\b", r"\bstapler\b", r"\bdesk\b", r"\bchair\b", r"\boffice supplies\b"],
+        "Professional Fees": [r"\blegal\b", r"\bconsulting\b", r"\baudit\b", r"\baccounting\b", r"\badvisory\b", r"\bfees\b", r"\blawyer\b", r"\bca fee\b"],
+        "Rent": [r"\brent\b", r"\blandlord\b", r"\bdeposit\b", r"\boffice rent\b", r"\bco-working\b", r"\bwework\b"],
+        "Meals": [r"\bzomato\b", r"\bswiggy\b", r"\brestaurant\b", r"\bhotel food\b", r"\bmeals\b", r"\bcafe\b", r"\bstarbucks\b", r"\blunch\b", r"\bdinner\b", r"\bbreakfast\b", r"\bfood\b", r"\bcatering\b"],
+    }
+    for category, patterns in keywords.items():
+        for pattern in patterns:
+            if re.search(pattern, lowered):
+                return category
+    return "Others"
 
-    if nvidia_text:
-        embedded_text = nvidia_text
-        embedded_warnings = nvidia_warnings
-    else:
-        embedded_text, embedded_warnings = extract_embedded_pdf_text(path)
-        if ai_provider == "nvidia" and NVIDIA_API_KEY:
-            embedded_warnings = [*nvidia_warnings, *embedded_warnings]
 
-    ai_data, ai_warnings = extract_structured_data_with_ai(path, embedded_text, ai_provider)
-    if ai_data:
-        return extraction_result_from_ai_data(ai_data, [*embedded_warnings, *ai_warnings], embedded_text)
-
-    if embedded_text:
-        text = embedded_text
-        warnings = [*embedded_warnings, *ai_warnings]
-    else:
-        text, warnings = extract_text_from_pdf(path, ai_provider)
-        warnings = [*embedded_warnings, *ai_warnings, *warnings]
-    document_type = classify_document(text)
+def run_local_parser(text: str) -> dict:
+    doc_type = classify_document(text)
     invoice_amount = find_amount(text, "invoice_amount")
-    gross_amount = find_amount(text, "gross_amount") or invoice_amount
-    net_amount = find_amount(text, "net_amount") or (invoice_amount if document_type == "freelance_invoice" else gross_amount)
-    tds_amount = find_amount(text, "tds_amount")
+    gross = find_amount(text, "gross_amount") or invoice_amount
+    net = find_amount(text, "net_amount") or (invoice_amount if doc_type == "freelance_invoice" else gross)
+    tds = find_amount(text, "tds_amount")
     total_deductions_amount = find_amount(text, "deductions_amount")
-    vpf_amount = find_amount(text, "vpf_amount")
-    pf_amount = find_amount(text, "pf_amount")
-    deductions_amount = total_deductions_amount
-    if document_type == "salary" and total_deductions_amount > 0:
-        deductions_amount = round(max(0.0, total_deductions_amount - pf_amount - vpf_amount - tds_amount), 2)
-    gst_amount = round(max(0.0, net_amount - gross_amount), 2) if document_type == "freelance_invoice" else 0.0
-    if document_type == "freelance_invoice" and tds_amount == 0 and gross_amount > 0:
-        tds_amount = round(gross_amount * 0.10, 2)
+    vpf = find_amount(text, "vpf_amount")
+    pf = find_amount(text, "pf_amount")
+    
+    deductions = total_deductions_amount
+    if doc_type == "salary" and total_deductions_amount > 0:
+        lowered_text = text.lower()
+        if "less: dedns" in lowered_text or "less dedns" in lowered_text:
+            deductions = round(max(0.0, total_deductions_amount - pf - vpf), 2)
+        else:
+            deductions = round(max(0.0, total_deductions_amount - pf - vpf - tds), 2)
+        
+    gst = find_amount(text, "gst_amount")
+    if doc_type == "salary":
+        gst = 0.0
+    if doc_type in ("freelance_invoice", "purchase_expense") and gst == 0 and net > gross:
+        gst = round(net - gross, 2)
+        
+    if doc_type == "freelance_invoice" and tds == 0 and gross > 0:
+        tds = round(gross * 0.10, 2)
+    if doc_type == "freelance_invoice" and gross > 0:
+        net = round(gross - tds, 2)
+        
     pan = find_pan(text) or gstin_to_pan(text)
-    name = find_named_value(text, ["employee name", "name", "consultant", "freelancer"]) or find_invoice_seller(text)
+    name = find_named_value(text, ["employee name", "name", "consultant", "freelancer", "vendor", "seller"]) or find_invoice_seller(text)
     payer = find_payer(text)
     record_date = normalize_date(find_date(text))
+    
+    return {
+        "document_type": doc_type,
+        "name": name,
+        "pan": pan,
+        "payer": payer,
+        "record_date": record_date,
+        "gross_amount": gross,
+        "net_amount": net,
+        "tds_amount": tds,
+        "deductions_amount": deductions,
+        "pf_amount": pf,
+        "vpf_amount": vpf,
+        "gst_amount": gst,
+    }
 
-    confidence = 0.25
-    confidence += 0.2 if document_type != "unknown" else 0
-    confidence += 0.2 if gross_amount > 0 else 0
-    confidence += 0.15 if net_amount > 0 else 0
-    confidence += 0.1 if pan else 0
-    confidence += 0.1 if record_date else 0
-    confidence = min(confidence, 0.95)
 
-    if gross_amount == 0:
-        warnings.append("Gross amount could not be extracted.")
-    if document_type != "freelance_invoice" and net_amount > gross_amount and gross_amount > 0:
-        warnings.append("Net amount is greater than gross amount.")
-    if not pan:
-        warnings.append("PAN was not found in the document.")
-    if document_type == "unknown":
-        warnings.append("Document type could not be classified confidently.")
+def validate_local_extraction(data: dict) -> bool:
+    doc_type = data.get("document_type")
+    if doc_type not in ("salary", "freelance_invoice", "purchase_expense"):
+        return False
+        
+    gross = data.get("gross_amount", 0.0)
+    net = data.get("net_amount", 0.0)
+    if gross <= 0 or net <= 0:
+        return False
+        
+    if not data.get("record_date"):
+        return False
+        
+    if doc_type == "salary":
+        pf = data.get("pf_amount", 0.0)
+        vpf = data.get("vpf_amount", 0.0)
+        tds = data.get("tds_amount", 0.0)
+        deds = data.get("deductions_amount", 0.0)
+        expected_net = gross - (pf + vpf + tds + deds)
+        return abs(expected_net - net) <= 10.0
+        
+    if doc_type == "freelance_invoice":
+        tds = data.get("tds_amount", 0.0)
+        expected_net = gross - tds
+        return abs(expected_net - net) <= 10.0
+        
+    if doc_type == "purchase_expense":
+        gst = data.get("gst_amount", 0.0)
+        expected_net = gross + gst
+        return abs(expected_net - net) <= 10.0
+        
+    return False
 
+
+def extract_financial_fields(path: Path, ai_provider: str = "local") -> ExtractionResult:
+    warnings: list[str] = []
+    
+    # 1. Try to extract text using local PyPDF first
+    embedded_text, embedded_warnings = extract_embedded_pdf_text(path)
+    warnings.extend(embedded_warnings)
+    
+    # 2. If no embedded text found, run PyMuPDF/pdf2image local OCR fallback
+    if not embedded_text:
+        try:
+            from pdf2image import convert_from_path
+            import pytesseract
+            
+            images = convert_from_path(str(path), dpi=220)
+            ocr_text = "\n".join(pytesseract.image_to_string(image) for image in images).strip()
+            if ocr_text:
+                embedded_text = ocr_text
+                warnings.append("Text was extracted using local OCR fallback.")
+        except Exception as exc:
+            warnings.append(f"Local OCR fallback could not run: {exc}")
+            
+    # 3. Run Local Rule-Based Python parser on the text
+    local_data = {}
+    local_success = False
+    
+    if embedded_text:
+        local_data = run_local_parser(embedded_text)
+        local_success = validate_local_extraction(local_data)
+        
+    if local_success:
+        warnings.append("Successfully extracted details using Local Python Parser.")
+        category = "Others"
+        if local_data["document_type"] == "purchase_expense":
+            category = classify_expense_category(embedded_text)
+            
+        extracted_json_dict = {
+            "source_document_type": local_data["document_type"],
+            "invoice_details": {
+                "seller_name": local_data["name"] if local_data["document_type"] in ("freelance_invoice", "purchase_expense") else None,
+                "buyer_name": local_data["payer"] if local_data["document_type"] in ("freelance_invoice", "purchase_expense") else None,
+                "total_chargeable_value": local_data["gross_amount"],
+                "grand_total_amount": local_data["net_amount"],
+                "taxation": {
+                    "cgst": {"amount": local_data["gst_amount"] / 2.0 if local_data["gst_amount"] > 0 else 0.0},
+                    "sgst_or_utgst": {"amount": local_data["gst_amount"] / 2.0 if local_data["gst_amount"] > 0 else 0.0}
+                }
+            },
+            "payroll_data": {
+                "employee_name": local_data["name"] if local_data["document_type"] == "salary" else None,
+                "earnings": {"gross_salary": local_data["gross_amount"]},
+                "deductions": {
+                    "pf_employee": local_data["pf_amount"],
+                    "vpf_employee": local_data["vpf_amount"],
+                    "tax_tds": local_data["tds_amount"],
+                    "other_deductions": [{"amount": local_data["deductions_amount"]}] if local_data["deductions_amount"] > 0 else []
+                },
+                "net_pay": {"final_salary_after_deductions": local_data["net_amount"]}
+            },
+            "metadata": {
+                "date_issued": local_data["record_date"]
+            },
+            "category": category,
+            "notes": local_data["payer"] or ""
+        }
+        
+        return ExtractionResult(
+            document_type=local_data["document_type"],
+            name=local_data["name"],
+            pan=local_data["pan"],
+            payer=local_data["payer"],
+            record_date=local_data["record_date"],
+            gross_amount=local_data["gross_amount"],
+            net_amount=local_data["net_amount"],
+            tds_amount=local_data["tds_amount"],
+            deductions_amount=local_data["deductions_amount"],
+            pf_amount=local_data["pf_amount"],
+            vpf_amount=local_data["vpf_amount"],
+            gst_amount=local_data["gst_amount"],
+            confidence=0.95,
+            warnings=warnings,
+            extracted_text=json.dumps(extracted_json_dict, indent=2)
+        )
+        
+    # 4. Local parser failed/incomplete. Try Local Hosted AI (LM Studio).
+    warnings.append("Local parser failed mathematical validation or completeness. Falling back to Local Hosted AI.")
+
+    local_ai_data = {}
+    local_ai_warnings = []
+    try:
+        local_ai_data, local_ai_warnings = extract_structured_data_with_ai(path, embedded_text, "local")
+    except Exception as exc:
+        warnings.append(f"Local Hosted AI failed: {exc}")
+        
+    if local_ai_data:
+        all_warns = [*warnings, *local_ai_warnings]
+        return extraction_result_from_ai_data(local_ai_data, all_warns, embedded_text)
+        
+    # 6. If all AI models failed, use the best effort local rule-based parsing results
+    warnings.append("All AI models failed. Using best-effort Local Parser results.")
+    
+    category = "Others"
+    best_doc_type = "unknown"
+    if local_data:
+        best_doc_type = local_data.get("document_type", "unknown")
+        if best_doc_type == "purchase_expense":
+            category = classify_expense_category(embedded_text)
+            
+    extracted_json_dict = {
+        "source_document_type": best_doc_type,
+        "invoice_details": {
+            "seller_name": local_data.get("name") if local_data and best_doc_type in ("freelance_invoice", "purchase_expense") else None,
+            "buyer_name": local_data.get("payer") if local_data and best_doc_type in ("freelance_invoice", "purchase_expense") else None,
+            "total_chargeable_value": local_data.get("gross_amount", 0.0) if local_data else 0.0,
+            "grand_total_amount": local_data.get("net_amount", 0.0) if local_data else 0.0,
+            "taxation": {
+                "cgst": {"amount": (local_data.get("gst_amount", 0.0) / 2.0) if local_data and local_data.get("gst_amount", 0.0) > 0 else 0.0},
+                "sgst_or_utgst": {"amount": (local_data.get("gst_amount", 0.0) / 2.0) if local_data and local_data.get("gst_amount", 0.0) > 0 else 0.0}
+            }
+        },
+        "payroll_data": {
+            "employee_name": local_data.get("name") if local_data and best_doc_type == "salary" else None,
+            "earnings": {"gross_salary": local_data.get("gross_amount", 0.0) if local_data else 0.0},
+            "deductions": {
+                "pf_employee": local_data.get("pf_amount", 0.0) if local_data else 0.0,
+                "vpf_employee": local_data.get("vpf_amount", 0.0) if local_data else 0.0,
+                "tax_tds": local_data.get("tds_amount", 0.0) if local_data else 0.0,
+                "other_deductions": [{"amount": local_data.get("deductions_amount", 0.0)}] if local_data and local_data.get("deductions_amount", 0.0) > 0 else []
+            },
+            "net_pay": {"final_salary_after_deductions": local_data.get("net_amount", 0.0) if local_data else 0.0}
+        },
+        "metadata": {
+            "date_issued": local_data.get("record_date") if local_data else None
+        },
+        "category": category,
+        "notes": local_data.get("payer", "") if local_data else ""
+    }
+    
     return ExtractionResult(
-        document_type=document_type,
-        name=name,
-        pan=pan,
-        payer=payer,
-        record_date=record_date,
-        gross_amount=gross_amount,
-        net_amount=net_amount,
-        tds_amount=tds_amount,
-        deductions_amount=deductions_amount,
-        pf_amount=pf_amount,
-        vpf_amount=vpf_amount,
-        gst_amount=gst_amount,
-        confidence=round(confidence, 2),
+        document_type=best_doc_type,
+        name=local_data.get("name") if local_data else None,
+        pan=local_data.get("pan") if local_data else None,
+        payer=local_data.get("payer") if local_data else None,
+        record_date=local_data.get("record_date") if local_data else None,
+        gross_amount=local_data.get("gross_amount", 0.0) if local_data else 0.0,
+        net_amount=local_data.get("net_amount", 0.0) if local_data else 0.0,
+        tds_amount=local_data.get("tds_amount", 0.0) if local_data else 0.0,
+        deductions_amount=local_data.get("deductions_amount", 0.0) if local_data else 0.0,
+        pf_amount=local_data.get("pf_amount", 0.0) if local_data else 0.0,
+        vpf_amount=local_data.get("vpf_amount", 0.0) if local_data else 0.0,
+        gst_amount=local_data.get("gst_amount", 0.0) if local_data else 0.0,
+        confidence=0.25,
         warnings=warnings,
-        extracted_text=text[:20000],
+        extracted_text=json.dumps(extracted_json_dict, indent=2)
     )

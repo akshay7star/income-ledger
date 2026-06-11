@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from difflib import SequenceMatcher
 import sqlite3
 from pathlib import Path
 
@@ -64,29 +65,85 @@ def get_or_create_user_for_extraction(extraction: dict) -> tuple[int | None, flo
     return int(cursor.lastrowid), 0.75
 
 
+def normalize_person_name(value: str | None) -> str:
+    text = "".join(ch.lower() if ch.isalnum() or ch.isspace() else " " for ch in str(value or ""))
+    return " ".join(text.split())
+
+
+def name_tokens(value: str | None) -> list[str]:
+    return [token for token in normalize_person_name(value).split() if len(token) > 1]
+
+
+def name_similarity(left: str | None, right: str | None) -> float:
+    left_norm = normalize_person_name(left)
+    right_norm = normalize_person_name(right)
+    if not left_norm or not right_norm:
+        return 0.0
+    if left_norm == right_norm:
+        return 1.0
+
+    left_tokens = name_tokens(left_norm)
+    right_tokens = name_tokens(right_norm)
+    if not left_tokens or not right_tokens:
+        return SequenceMatcher(None, left_norm, right_norm).ratio()
+
+    left_sorted = " ".join(sorted(left_tokens))
+    right_sorted = " ".join(sorted(right_tokens))
+    sorted_ratio = SequenceMatcher(None, left_sorted, right_sorted).ratio()
+
+    matched = 0
+    for left_token in left_tokens:
+        if any(SequenceMatcher(None, left_token, right_token).ratio() >= 0.84 for right_token in right_tokens):
+            matched += 1
+    token_ratio = matched / max(len(left_tokens), len(right_tokens))
+    direct_ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
+    return max(direct_ratio, sorted_ratio, token_ratio)
+
+
+def candidate_names(user: dict) -> list[str]:
+    return [
+        user["name"],
+        *[item.strip() for item in (user.get("aliases") or "").split(",") if item.strip()],
+    ]
+
+
 def find_user_match(extraction: dict) -> tuple[int | None, float]:
     users = list_users()
     if not users:
         return None, 0.0
     best_id: int | None = None
     best_score = 0.0
-    text = " ".join(
-        str(extraction.get(key) or "") for key in ["name", "pan", "payer", "extracted_text"]
-    ).lower()
-    pan = (extraction.get("pan") or "").upper()
+    text = " ".join(str(extraction.get(key) or "") for key in ["name", "pan", "payer", "extracted_text"])
+    normalized_text = normalize_person_name(text)
+    pan = (extraction.get("pan") or "").upper().strip()
+    extracted_name = extraction.get("name") or ""
     for user in users:
         score = 0.0
-        if user.get("pan") and user["pan"].upper() == pan:
-            score += 0.65
-        names = [user["name"], *[item.strip() for item in (user.get("aliases") or "").split(",") if item.strip()]]
-        if any(name.lower() in text for name in names if name):
-            score += 0.25
+        user_pan = (user.get("pan") or "").upper().strip()
+        if user_pan and pan and user_pan == pan:
+            return user["id"], 0.98
+
+        best_name_score = 0.0
+        for name in candidate_names(user):
+            normalized_name = normalize_person_name(name)
+            if normalized_name and normalized_name in normalized_text:
+                best_name_score = max(best_name_score, 1.0)
+            best_name_score = max(best_name_score, name_similarity(extracted_name, name))
+        if best_name_score >= 0.92:
+            score += 0.55
+        elif best_name_score >= 0.84:
+            score += 0.42
+        elif best_name_score >= 0.74:
+            score += 0.28
+
         hints = [item.strip() for item in (user.get("profile_hints") or "").split(",") if item.strip()]
-        if any(hint.lower() in text for hint in hints):
+        if any(normalize_person_name(hint) in normalized_text for hint in hints if normalize_person_name(hint)):
             score += 0.1
         if score > best_score:
             best_id = user["id"]
             best_score = score
+    if best_score < 0.42:
+        return None, 0.0
     return best_id, round(min(best_score, 0.95), 2)
 
 
@@ -229,16 +286,19 @@ def delete_document(document_id: int) -> dict:
 
 def validation_warnings(conn: sqlite3.Connection, user_id: int, payload: dict, financial_year: str, period: str) -> list[str]:
     warnings: list[str] = []
-    existing = conn.execute(
-        """
-        SELECT id FROM income_records
-        WHERE user_id = ? AND financial_year = ? AND period_label = ? AND income_type = ?
-          AND (? IS NULL OR document_id IS NULL OR document_id != ?)
-        """,
-        (user_id, financial_year, period, payload["income_type"], payload.get("document_id"), payload.get("document_id")),
-    ).fetchone()
-    if existing:
-        warnings.append(f"Another {payload['income_type']} record already exists for {period}.")
+    
+    # Check duplicate only if it is salary or freelance_invoice (income records)
+    if payload.get("income_type") in ("salary", "freelance_invoice"):
+        existing = conn.execute(
+            """
+            SELECT id FROM income_records
+            WHERE user_id = ? AND financial_year = ? AND period_label = ? AND income_type = ?
+              AND (? IS NULL OR document_id IS NULL OR document_id != ?)
+            """,
+            (user_id, financial_year, period, payload["income_type"], payload.get("document_id"), payload.get("document_id")),
+        ).fetchone()
+        if existing:
+            warnings.append(f"Another {payload['income_type']} record already exists for {period}.")
 
     gross = float(payload.get("gross_amount") or 0)
     net = float(payload.get("net_amount") or 0)
@@ -260,6 +320,11 @@ def validation_warnings(conn: sqlite3.Connection, user_id: int, payload: dict, f
         if tds == 0:
             warnings.append("No TDS was recorded for this freelance invoice.")
 
+    if payload["income_type"] == "purchase_expense" and gross > 0:
+        expected_net = gross + gst
+        if abs(expected_net - net) > 10.0:
+            warnings.append("Gross amount plus GST does not closely match net amount.")
+
     return warnings
 
 
@@ -269,14 +334,31 @@ def confirm_extraction(document_id: int, payload: dict) -> dict:
     period = month_label(record_date)
     user_id = int(payload["user_id"])
     income_type = payload["income_type"]
+
+    if income_type == "purchase_expense":
+        with get_connection() as conn:
+            warnings = validation_warnings(conn, user_id, payload, financial_year, period)
+        expense_payload = {
+            "user_id": user_id,
+            "expense_date": record_date.isoformat(),
+            "category": payload.get("category") or "Others",
+            "amount": float(payload.get("net_amount") or payload.get("gross_amount") or 0),
+            "gst_amount": float(payload.get("gst_amount") or 0),
+            "notes": payload.get("notes") or f"{payload.get('payer') or 'Vendor invoice'}",
+            "validation_warnings": warnings
+        }
+        row = add_document_expense(document_id, expense_payload)
+        return row
+
     if income_type == "freelance_invoice":
         gross = float(payload.get("gross_amount") or 0)
         tds = float(payload.get("tds_amount") or 0)
+        gst = float(payload.get("gst_amount") or 0)
         if tds == 0 and gross > 0:
             tds = round(gross * 0.10, 2)
             payload["tds_amount"] = tds
         payload["net_amount"] = round(gross - tds, 2)
-        payload["gst_amount"] = 0.0
+        payload["gst_amount"] = gst
 
     with get_connection() as conn:
         document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
