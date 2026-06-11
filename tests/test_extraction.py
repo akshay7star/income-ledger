@@ -117,6 +117,64 @@ def test_ai_payroll_schema_maps_to_review_form_fields():
     assert result.deductions_amount == 0
 
 
+def test_flat_local_ai_schema_maps_to_review_form_fields():
+    result = extraction_result_from_ai_data(
+        {
+            "document_type": "freelance_invoice",
+            "name": "Devlina Consulting",
+            "pan": "ABCDE1234F",
+            "payer": "Acme Pvt Ltd",
+            "record_date": "2026-05-31",
+            "gross_amount": "100000",
+            "net_amount": "90000",
+            "tds_amount": "10000",
+            "gst_amount": "18000",
+        },
+        [],
+    )
+    assert result.document_type == "freelance_invoice"
+    assert result.name == "Devlina Consulting"
+    assert result.payer == "Acme Pvt Ltd"
+    assert result.record_date == "2026-05-31"
+    assert result.pan == "ABCDE1234F"
+    assert result.gross_amount == 100000
+    assert result.net_amount == 90000
+    assert result.tds_amount == 10000
+    assert result.gst_amount == 18000
+
+
+def test_nested_local_ai_salary_aliases_map_to_review_fields():
+    result = extraction_result_from_ai_data(
+        {
+            "type": "salary slip",
+            "employee": {
+                "employee_name": "Bhatnagar Akshay",
+                "pan_number": "BPLPB7839D",
+                "employer": "Terafina Software Solutions Pvt Ltd",
+            },
+            "salary_details": {
+                "pay_date": "30.04.2024",
+                "total_gross": "108,860.71",
+                "total_net_pay": "89,403.00",
+                "income_tax": "6,158.00",
+                "employee_pf": "5,320.00",
+                "employee_vpf": "7,980.00",
+                "less_deductions": "13,300.10",
+            },
+        },
+        [],
+    )
+    assert result.document_type == "salary"
+    assert result.name == "Bhatnagar Akshay"
+    assert result.payer == "Terafina Software Solutions Pvt Ltd"
+    assert result.record_date == "2024-04-30"
+    assert result.gross_amount == 108860.71
+    assert result.net_amount == 89403
+    assert result.tds_amount == 6158
+    assert result.pf_amount == 5320
+    assert result.vpf_amount == 7980
+
+
 def test_tax_invoice_text_fields_are_detected_without_ocr():
     text = """
 Tax Invoice
@@ -191,6 +249,40 @@ Terafina Software Solutions Pvt Ltd
     assert find_amount(text, "vpf_amount") == 9093.00
 
 
+def test_terafina_old_salary_slip_extracts_totals_and_validates():
+    from backend.app.extraction import run_local_parser, validate_local_extraction
+    text = """
+--------------------------------------------------------------------------------
+|                           Terafina Software Solutions Pvt Ltd                |
+| Employee ID  :50038885                 Pay Period    :01.04.24  -30.04.24    |
+| Employee Name:Bhatnagar Akshay         Pay Date      :30.04.2024             |
+| Designation  :                         PAN           :BPLPB7839D             |
+| EARNINGS & ALLOWANCES      UNITS          INR| DEDUCTIONS                INR |
+| Monthly Base Salary                 44,331.00| Income Tax           6,158.00 |
+|*Overtime                             4,950.00| Ee PF contribut      5,320.00 |
+|*Roster Allowance                     8,050.00| Ee VPF contribu      7,980.00 |
+|*Call Out Allowance                   3,600.00|*Current Month E          0.39 |
+| House Rent Allowance                20,150.00| Current Month E          0.29-|
+| Taxable Allowance                   27,779.71|                               |
+| Other details                                | Total Gross        108,860.71 |
+|                                              | Less: Tax            6,158.00 |
+|                                              | Less: Dedns         13,300.10 |
+|ANNUAL LEAVE (DAYS)                  63.00    | NET PAY             89,403.00 |
+"""
+    data = run_local_parser(text)
+    assert data["document_type"] == "salary"
+    assert data["name"] == "Bhatnagar Akshay"
+    assert data["payer"] == "Terafina Software Solutions Pvt Ltd"
+    assert data["record_date"] == "2024-04-30"
+    assert data["gross_amount"] == 108860.71
+    assert data["net_amount"] == 89403
+    assert data["tds_amount"] == 6158
+    assert data["pf_amount"] == 5320
+    assert data["vpf_amount"] == 7980
+    assert data["deductions_amount"] == 0.1
+    assert validate_local_extraction(data) is True
+
+
 def test_exoedge_total_earnings_payslip_amounts_are_detected():
     text = """
 EXO EDGE ADVANTAGE INDIA PVT LTD
@@ -222,72 +314,60 @@ Net Salary : 258,647.00
     assert find_amount(text, "net_amount") == 258647.00
 
 
-def test_extract_text_with_nvidia_ocr_success(monkeypatch):
-    import io
+def test_exoedge_april_2026_layout_parses_and_validates():
+    from backend.app.extraction import run_local_parser, validate_local_extraction
+    text = """
+:
+:
+EXO Edge Advantage India Private Limited
+A 10 Ground Floor,Bestech Business Tower Sec-66, Mohali S.A.S.Nagar
+Punjab 160066 India
+Payslip For the Month
+April 2026
+EMPLOYEE SUMMARY
+Employee Name Devlina Bhatnagar
+Designation Senior Software Engineer
+Employee ID EEA2590
+Pay Period April 2026
+Pay Date 30/04/2026
+₹2,04,388.00
+Total Net Pay
+Paid Days 30
+PAN CPIPP9940K
+EARNINGS AMOUNT YTD
+Basic ₹1,41,667.00 ₹1,41,667.00
+House Rent Allowance ₹56,667.00 ₹56,667.00
+Special Allowance ₹67,000.00 ₹67,000.00
+DEDUCTIONS AMOUNT YTD
+EPF Contribution ₹17,000.00 ₹17,000.00
+Income Tax ₹44,746.00 ₹44,746.00
+Professional Tax ₹200.00 ₹200.00
+Gross Earnings ₹2,66,334.00 Total Deductions ₹61,946.00
+TOTAL NET PAYABLE
+Gross Earnings - Total Deductions ₹2,04,388.00
+BENEFITS EMPLOYEE
+CONTRIBUTION EMPLOYEE YTD EMPLOYER
+CONTRIBUTION EMPLOYER YTD
+"""
+    data = run_local_parser(text)
+    assert data["document_type"] == "salary"
+    assert data["name"] == "Devlina Bhatnagar"
+    assert data["payer"] == "EXO Edge Advantage India Private Limited"
+    assert data["pan"] == "CPIPP9940K"
+    assert data["gross_amount"] == 266334
+    assert data["net_amount"] == 204388
+    assert data["tds_amount"] == 44746
+    assert data["deductions_amount"] == 200
+    assert data["pf_amount"] == 17000
+    assert data["gst_amount"] == 0
+    assert validate_local_extraction(data) is True
+
+
+def test_extract_structured_data_uses_only_local_lm_studio(monkeypatch):
     import json
     from pathlib import Path
     from backend.app import extraction
 
-    # Temporarily set NVIDIA_API_KEY
-    monkeypatch.setattr(extraction, "NVIDIA_API_KEY", "fake_key")
-
-    # Mock PyMuPDF fitz module
-    class FakePixmap:
-        def tobytes(self, fmt):
-            return b"fake_png_data"
-            
-    class FakePage:
-        def load_page(self, idx):
-            return self
-        def get_pixmap(self, dpi):
-            return FakePixmap()
-
-    class FakeDoc:
-        def __init__(self, path):
-            pass
-        def __len__(self):
-            return 1
-        def load_page(self, idx):
-            return FakePage()
-
-    fake_fitz = SimpleNamespace(open=FakeDoc)
-    monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
-
-    # Mock urllib.request.urlopen
-    class FakeResponse:
-        def read(self):
-            return json.dumps({
-                "data": [
-                    {
-                        "text_detections": [
-                            {"text_prediction": {"text": "Hello World"}}
-                        ]
-                    }
-                ]
-            }).encode("utf-8")
-        def __enter__(self):
-            return self
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            pass
-
-    def mock_urlopen(req, timeout=None):
-        return FakeResponse()
-
-    import urllib.request
-    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
-
-    text, warnings = extraction.extract_text_with_nvidia_ocr(Path("dummy.pdf"))
-    assert text == "Hello World"
-    assert "Text was successfully extracted using NVIDIA OCR API." in warnings
-
-
-def test_extract_structured_data_with_ai_providers(monkeypatch):
-    import json
-    from pathlib import Path
-    from backend.app import extraction
-
-    monkeypatch.setattr(extraction, "NVIDIA_API_KEY", "nvidia_key")
-    monkeypatch.setattr(extraction, "GOOGLE_API_KEY", "google_key")
     monkeypatch.setattr(extraction, "LOCAL_AI_BASE_URLS", ["http://localhost:1234/v1"])
 
     captured_requests = []
@@ -317,40 +397,123 @@ def test_extract_structured_data_with_ai_providers(monkeypatch):
     import urllib.request
     monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
 
-    # Test NVIDIA provider
-    data, warnings = extraction.extract_structured_data_with_ai(Path("dummy.pdf"), "embedded", "nvidia")
-    assert data == {"source_document_type": "Salary Slip"}
-    assert "Cloud AI analysis used model meta/llama-3.3-70b-instruct." in warnings
-
-    # Test Google provider
-    data, warnings = extraction.extract_structured_data_with_ai(Path("dummy.pdf"), "embedded", "google")
-    assert data == {"source_document_type": "Salary Slip"}
-    assert "Cloud AI analysis used model google/gemma-4-31b-it." in warnings
-
-    # Test Local provider
     data, warnings = extraction.extract_structured_data_with_ai(Path("dummy.pdf"), "embedded", "local")
     assert data == {"source_document_type": "Salary Slip"}
     assert "Local AI analysis used model google/gemma-4-e4b." in warnings
 
-    assert len(captured_requests) == 3
-    # Check NVIDIA payload details
-    url1, payload1, headers1 = captured_requests[0]
-    assert url1 == "https://integrate.api.nvidia.com/v1/chat/completions"
-    assert payload1["model"] == "meta/llama-3.3-70b-instruct"
-    assert headers1["Authorization"] == "Bearer nvidia_key"
-    assert "chat_template_kwargs" not in payload1
+    assert len(captured_requests) == 1
+    url, payload, headers = captured_requests[0]
+    assert url == "http://localhost:1234/v1/chat/completions"
+    assert payload["model"] == "google/gemma-4-e4b"
+    assert headers.get("Authorization") is None or "Bearer" not in headers.get("Authorization", "")
 
-    # Check Google payload details
-    url2, payload2, headers2 = captured_requests[1]
-    assert url2 == "https://integrate.api.nvidia.com/v1/chat/completions"
-    assert payload2["model"] == "google/gemma-4-31b-it"
-    assert headers2["Authorization"] == "Bearer google_key"
-    assert payload2["chat_template_kwargs"] == {"enable_thinking": True}
-    assert payload2["temperature"] == 1.0
 
-    # Check Local payload details
-    url3, payload3, headers3 = captured_requests[2]
-    assert url3 == "http://localhost:1234/v1/chat/completions"
-    assert payload3["model"] == "google/gemma-4-e4b"
-    assert headers3.get("Authorization") is None or "Bearer" not in headers3.get("Authorization", "")
+def test_classify_document_expense():
+    text = "Payment receipt from Amazon Web Services for software cloud hosting bill"
+    assert classify_document(text) == "purchase_expense"
+
+
+def test_classify_expense_category():
+    from backend.app.extraction import classify_expense_category
+    assert classify_expense_category("Uber taxi ride to office") == "Travel"
+    assert classify_expense_category("AWS cloud web server domain renewal") == "Software"
+    assert classify_expense_category("Apple MacBook keyboard repair receipt") == "Hardware"
+    assert classify_expense_category("Bescom electricity bill payment") == "Utilities"
+    assert classify_expense_category("A4 paper packets and ball pens invoice") == "Office Supplies"
+    assert classify_expense_category("Legal advice consulting fees from counsel") == "Professional Fees"
+    assert classify_expense_category("Office coworking rent wework invoice") == "Rent"
+    assert classify_expense_category("Lunch at Zomato restaurant meals bill") == "Meals"
+    assert classify_expense_category("Unclassified general purchase") == "Others"
+
+
+def test_run_local_parser_and_validate_expense():
+    from backend.app.extraction import run_local_parser, validate_local_extraction
+    text = """
+    TAX RECEIPT
+    Vendor: DigitalOcean Inc.
+    Date: 2026-06-01
+    Gross Amount: 1,000.00
+    GST: 180.00
+    Total Amount Paid: 1,180.00
+    """
+    data = run_local_parser(text)
+    assert data["document_type"] == "purchase_expense"
+    assert data["gross_amount"] == 1000.0
+    assert data["net_amount"] == 1180.0
+    assert data["gst_amount"] == 180.0
+    assert data["record_date"] == "2026-06-01"
+    
+    assert validate_local_extraction(data) is True
+
+
+def test_run_local_parser_validates_gst_freelance_invoice():
+    from backend.app.extraction import run_local_parser, validate_local_extraction
+    text = """
+    Tax Invoice
+    Devlina Consulting
+    Bill To: Acme Pvt Ltd
+    Dated
+    31-May-2026
+    Professional Charges 1,00,000.00
+    CGST 9,000.00
+    SGST 9,000.00
+    Grand Total 1,18,000.00
+    """
+    data = run_local_parser(text)
+    assert data["document_type"] == "freelance_invoice"
+    assert data["gross_amount"] == 100000
+    assert data["gst_amount"] == 18000
+    assert data["tds_amount"] == 10000
+    assert data["net_amount"] == 90000
+    assert data["record_date"] == "2026-05-31"
+    assert validate_local_extraction(data) is True
+
+
+def test_run_local_parser_reads_gst_from_tally_style_freelance_invoice():
+    from backend.app.extraction import run_local_parser, validate_local_extraction
+    text = """
+    INVOICE
+    DEVLINA BHATNAGAR
+    09CPIPP9940K1Z1
+    Buyer
+    Gen Aquarius Private Limited
+    Invoice No.
+    001/2026-27
+    Dated
+    29-Apr-2026
+    1 Professional Charges for the M/o April,2026 2,83,333.00
+    2 Output-CGST-9% 25,499.97%9
+    3 Output-SGST-9% 25,499.97%9
+    Total INR 3,34,332.94
+    """
+    data = run_local_parser(text)
+    assert data["document_type"] == "freelance_invoice"
+    assert data["name"] == "DEVLINA BHATNAGAR"
+    assert data["pan"] == "CPIPP9940K"
+    assert data["payer"] == "Gen Aquarius Private Limited"
+    assert data["record_date"] == "2026-04-29"
+    assert data["gross_amount"] == 283333
+    assert data["gst_amount"] == 50999.94
+    assert data["tds_amount"] == 28333.3
+    assert data["net_amount"] == 254999.7
+    assert validate_local_extraction(data) is True
+
+
+def test_local_parser_fallback_pipeline(monkeypatch, tmp_path):
+    from backend.app import extraction
+    
+    # Mock extract_embedded_pdf_text
+    monkeypatch.setattr(extraction, "extract_embedded_pdf_text", lambda _p: (
+        "TAX RECEIPT\nVendor: AWS\nDate: 2026-06-01\nGross Amount: 1000\nGST: 180\nTotal Amount Paid: 1180\n",
+        []
+    ))
+    
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    
+    res = extraction.extract_financial_fields(pdf, "local")
+    assert res.document_type == "purchase_expense"
+    assert res.confidence == 0.95
+    assert "Successfully extracted details using Local Python Parser." in res.warnings
+
 

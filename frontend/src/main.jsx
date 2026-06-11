@@ -109,13 +109,20 @@ function getRealWarnings(warnings) {
     const lowered = w.toLowerCase();
     return !(
       lowered.includes("used model") ||
-      lowered.includes("trying nvidia ocr") ||
       lowered.includes("trying local ai") ||
       lowered.includes("successfully extracted using") ||
       lowered.includes("extracted using ocr fallback") ||
       lowered.includes("no embedded pdf text found")
     );
   });
+}
+
+function summarizeStageFailure(response, error) {
+  if (response?.detail) return response.detail;
+  if (response?.warnings?.length) return response.warnings.slice(-2).join(' ');
+  if (response?.reason) return response.reason;
+  if (error?.message) return error.message;
+  return 'No detailed error was returned.';
 }
 
 function App() {
@@ -136,9 +143,6 @@ function App() {
   const [status, setStatus] = useState('');
   const [uploadJobs, setUploadJobs] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem('income-ledger-theme') || 'light');
-  const [selectedAiProvider, setSelectedAiProvider] = useState(
-    () => localStorage.getItem('income-ledger-ai-provider') || 'nvidia'
-  );
   const selectedUserRef = useRef(selectedUser);
   const selectedYearRef = useRef(selectedYear);
 
@@ -212,30 +216,89 @@ function App() {
     const jobs = files.map((file, index) => ({ id: `${Date.now()}-${index}`, name: file.name, state: 'queued' }));
     setUploadJobs((current) => [...jobs, ...current].slice(0, 8));
     setStatus(`Queued ${files.length} PDF${files.length > 1 ? 's' : ''}. You can keep using the dashboard.`);
-    void processUploadQueue(files, jobs, selectedAiProvider);
+    void processUploadQueue(files, jobs);
   }
 
   function updateUploadJob(jobId, patch) {
     setUploadJobs((current) => current.map((job) => (job.id === jobId ? { ...job, ...patch } : job)));
   }
 
-  async function processUploadQueue(files, jobs, aiProvider) {
+  async function processUploadQueue(files, jobs) {
     const uploadedDocs = [];
     try {
       for (const [index, file] of files.entries()) {
         const job = jobs[index];
         const form = new FormData();
         form.append('file', file);
-        form.append('ai_provider', aiProvider);
+        form.append('stage', 'local');
         if (selectedUserRef.current !== 'all') form.append('user_id', selectedUserRef.current);
+        
         setStatus(`Extracting ${index + 1} of ${files.length}: ${file.name}`);
         updateUploadJob(job.id, { state: 'extracting' });
-        const uploaded = await api('/documents/upload', { method: 'POST', body: form });
-        uploadedDocs.push(uploaded);
+        
+        let doc = null;
+        let localSuccess = false;
+        
+        // Stage 1: Try Local Python Parser
+        try {
+          const response1 = await api('/documents/upload', { method: 'POST', body: form });
+          doc = response1.document || response1;
+          localSuccess = response1.success !== false;
+        } catch (error) {
+          console.error("Local Python stage failed:", error);
+          localSuccess = false;
+        }
+        
+        if (!localSuccess) {
+          setStatus("Local Python extraction needs help. Moving to Local Hosted LM Studio AI.");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          let localAiSuccess = false;
+          let localAiFailure = '';
+          // Stage 2: Try Local Hosted AI (LM Studio)
+          try {
+            if (doc && doc.id) {
+              const form2 = new FormData();
+              form2.append('ai_provider', 'local');
+              if (selectedUserRef.current !== 'all') form2.append('user_id', selectedUserRef.current);
+              
+              const response2 = await api(`/documents/${doc.id}/re-extract`, { method: 'POST', body: form2 });
+              doc = response2.document || doc;
+              localAiSuccess = response2.success !== false;
+              if (!localAiSuccess) localAiFailure = summarizeStageFailure(response2);
+            } else {
+              const form2 = new FormData();
+              form2.append('file', file);
+              form2.append('ai_provider', 'local');
+              if (selectedUserRef.current !== 'all') form2.append('user_id', selectedUserRef.current);
+              
+              const response2 = await api('/documents/upload', { method: 'POST', body: form2 });
+              doc = response2.document || response2;
+              localAiSuccess = response2.success !== false;
+              if (!localAiSuccess) localAiFailure = summarizeStageFailure(response2);
+            }
+          } catch (error) {
+            console.error("Local AI stage failed:", error);
+            localAiFailure = summarizeStageFailure(null, error);
+            localAiSuccess = false;
+          }
+          
+          if (!localAiSuccess) {
+            setStatus(`Please manually check and fill details. Local Hosted LM Studio AI failed: ${localAiFailure}`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+        
+        if (!doc) {
+          throw new Error("Failed to process document. Please check server connections and logs.");
+        }
+        
+        uploadedDocs.push(doc);
         await refresh();
-        if (uploaded.status !== 'confirmed') {
+        
+        if (doc.status !== 'confirmed') {
           updateUploadJob(job.id, { state: 'needs review' });
-          setReviewDoc(uploaded);
+          setReviewDoc(doc);
           setStatus(`${file.name} needs review. Continuing with the next PDF.`);
         } else {
           updateUploadJob(job.id, { state: 'saved' });
@@ -314,19 +377,6 @@ function App() {
           {years.map((year) => (
             <option key={year} value={year}>{year}</option>
           ))}
-        </select>
-        <select
-          className="form-select"
-          value={selectedAiProvider}
-          onChange={(e) => {
-            setSelectedAiProvider(e.target.value);
-            localStorage.setItem('income-ledger-ai-provider', e.target.value);
-          }}
-          title="Select AI Provider"
-        >
-          <option value="nvidia">NVIDIA Cloud AI (Llama 3.3)</option>
-          <option value="google">Google Cloud AI (Gemma 4)</option>
-          <option value="local">Local AI (LM Studio)</option>
         </select>
         <NewUserForm onCreated={refresh} />
         <ExpenseForm users={users} selectedUser={selectedUser} onCreated={refresh} />
@@ -802,10 +852,22 @@ function ExpensesPanel({ expenses, users, onDeleted }) {
   );
 }
 
+const EXPENSE_CATEGORIES = [
+  'Travel',
+  'Software',
+  'Hardware',
+  'Utilities',
+  'Office Supplies',
+  'Professional Fees',
+  'Rent',
+  'Meals',
+  'Others'
+];
+
 function ReviewModal({ document, users, onClose, onSaved }) {
   const extracted = document.extracted || {};
   const rawExtractedType = extracted.income_type || extracted.document_type || document.document_type || 'freelance_invoice';
-  const extractedType = rawExtractedType === 'salary' ? 'salary' : 'freelance_invoice';
+  const extractedType = rawExtractedType === 'salary' ? 'salary' : (rawExtractedType === 'purchase_expense' ? 'purchase_expense' : 'freelance_invoice');
   const initialGross = Number(extracted.gross_amount || 0);
   const initialNet = Number(extracted.net_amount || 0);
   const initialTds = Number(extracted.tds_amount || 0);
@@ -817,14 +879,15 @@ function ReviewModal({ document, users, onClose, onSaved }) {
     record_date: extracted.record_date || '',
     payer: extracted.payer || '',
     gross_amount: initialGross,
-    net_amount: extractedType === 'freelance_invoice' ? roundMoney(initialGross - initialTdsVal) : initialNet,
-    tds_amount: initialTdsVal,
+    net_amount: extractedType === 'freelance_invoice' ? roundMoney(initialGross - initialTdsVal) : (extractedType === 'purchase_expense' ? roundMoney(initialGross + initialGst) : initialNet),
+    tds_amount: extractedType === 'purchase_expense' ? 0 : initialTdsVal,
     deductions_amount: extracted.deductions_amount || 0,
     pf_amount: extractedType === 'salary' ? extracted.pf_amount || 0 : 0,
     vpf_amount: extractedType === 'salary' ? extracted.vpf_amount || 0 : 0,
-    gst_amount: 0,
+    gst_amount: initialGst,
+    category: extracted.category || 'Others',
+    notes: extracted.notes || '',
   });
-  const isFreelance = form.income_type === 'freelance_invoice';
 
   const validationWarnings = useMemo(() => {
     const warnings = [];
@@ -861,6 +924,17 @@ function ReviewModal({ document, users, onClose, onSaved }) {
         });
       }
     }
+    if (form.income_type === 'purchase_expense' && gross > 0) {
+      const gst = Number(form.gst_amount || 0);
+      const expectedNet = gross + gst;
+      if (Math.abs(expectedNet - net) > 10.0) {
+        warnings.push({
+          type: 'expense_mismatch',
+          message: `Gross amount plus GST does not match net amount.`,
+          expected: expectedNet,
+        });
+      }
+    }
     return warnings;
   }, [form]);
 
@@ -869,7 +943,8 @@ function ReviewModal({ document, users, onClose, onSaved }) {
     const filteredDocWarnings = docWarnings.filter(w =>
       !w.includes("does not closely match net amount") &&
       !w.includes("does not match net amount") &&
-      !w.includes("No TDS was recorded")
+      !w.includes("No TDS was recorded") &&
+      !w.includes("plus GST does not closely match")
     );
     const docWarnObjects = filteredDocWarnings.map(w => ({ type: 'info', message: w }));
     return [...docWarnObjects, ...validationWarnings];
@@ -878,17 +953,18 @@ function ReviewModal({ document, users, onClose, onSaved }) {
   function applyIncomeType(nextType) {
     setForm((current) => {
       const gross = Number(current.gross_amount || 0);
+      const gst = Number(current.gst_amount || 0);
       const tds = nextType === 'freelance_invoice' && Number(current.tds_amount || 0) === 0
         ? roundMoney(gross * 0.1)
-        : Number(current.tds_amount || 0);
+        : (nextType === 'freelance_invoice' ? Number(current.tds_amount || 0) : 0);
       return {
         ...current,
         income_type: nextType,
         tds_amount: tds,
-        net_amount: nextType === 'freelance_invoice' ? roundMoney(gross - tds) : current.net_amount,
-        gst_amount: 0,
+        net_amount: nextType === 'freelance_invoice' ? roundMoney(gross - tds) : (nextType === 'purchase_expense' ? roundMoney(gross + gst) : current.net_amount),
         pf_amount: nextType === 'salary' ? current.pf_amount : 0,
         vpf_amount: nextType === 'salary' ? current.vpf_amount : 0,
+        gst_amount: nextType === 'salary' ? 0 : gst,
       };
     });
   }
@@ -897,8 +973,8 @@ function ReviewModal({ document, users, onClose, onSaved }) {
     const numericValue = Number(value);
     setForm((current) => {
       const next = { ...current, [key]: numericValue };
+      const gross = Number(next.gross_amount || 0);
       if (next.income_type === 'freelance_invoice') {
-        const gross = Number(next.gross_amount || 0);
         if (key === 'gross_amount') {
           next.tds_amount = roundMoney(gross * 0.1);
           next.net_amount = roundMoney(gross - next.tds_amount);
@@ -906,6 +982,12 @@ function ReviewModal({ document, users, onClose, onSaved }) {
           next.net_amount = roundMoney(gross - next.tds_amount);
         }
         next.gst_amount = 0;
+      } else if (next.income_type === 'purchase_expense') {
+        const gst = Number(next.gst_amount || 0);
+        if (key === 'gross_amount' || key === 'gst_amount') {
+          next.net_amount = roundMoney(gross + gst);
+        }
+        next.tds_amount = 0;
       }
       return next;
     });
@@ -934,26 +1016,37 @@ function ReviewModal({ document, users, onClose, onSaved }) {
           <label>Type<select className="form-select" value={form.income_type} onChange={(e) => applyIncomeType(e.target.value)}>
             <option value="salary">Salary</option>
             <option value="freelance_invoice">Freelance invoice</option>
+            <option value="purchase_expense">Expense</option>
           </select></label>
           <label>Date<input className="form-control" type="date" value={form.record_date} onChange={(e) => setForm({ ...form, record_date: e.target.value })} /></label>
-          <label>Employer / Company<input className="form-control" value={form.payer || ''} onChange={(e) => setForm({ ...form, payer: e.target.value })} /></label>
+          <label>{form.income_type === 'purchase_expense' ? 'Vendor' : 'Employer / Company'}<input className="form-control" value={form.payer || ''} onChange={(e) => setForm({ ...form, payer: e.target.value })} /></label>
           <label>Gross<input className="form-control" type="number" value={form.gross_amount} onChange={(e) => updateMoneyField('gross_amount', e.target.value)} /></label>
           <label>Net<input className="form-control" type="number" value={form.net_amount} onChange={(e) => updateMoneyField('net_amount', e.target.value)} /></label>
-          <label>TDS<input className="form-control" type="number" value={form.tds_amount} onChange={(e) => updateMoneyField('tds_amount', e.target.value)} /></label>
-          {isFreelance ? (
-            <label>GST<input className="form-control" type="number" value={form.gst_amount} onChange={(e) => updateMoneyField('gst_amount', e.target.value)} /></label>
-          ) : (
+          {form.income_type !== 'purchase_expense' && (
+            <label>TDS<input className="form-control" type="number" value={form.tds_amount} onChange={(e) => updateMoneyField('tds_amount', e.target.value)} /></label>
+          )}
+          {form.income_type === 'salary' ? (
             <>
               <label>Other deductions<input className="form-control" type="number" value={form.deductions_amount} onChange={(e) => updateMoneyField('deductions_amount', e.target.value)} /></label>
               <label>PF<input className="form-control" type="number" value={form.pf_amount} onChange={(e) => updateMoneyField('pf_amount', e.target.value)} /></label>
               <label>VPF<input className="form-control" type="number" value={form.vpf_amount} onChange={(e) => updateMoneyField('vpf_amount', e.target.value)} /></label>
+            </>
+          ) : form.income_type === 'freelance_invoice' ? (
+            <label>GST<input className="form-control" type="number" value={form.gst_amount} onChange={(e) => updateMoneyField('gst_amount', e.target.value)} /></label>
+          ) : (
+            <>
+              <label>GST<input className="form-control" type="number" value={form.gst_amount} onChange={(e) => updateMoneyField('gst_amount', e.target.value)} /></label>
+              <label>Category<select className="form-select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required>
+                {EXPENSE_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select></label>
+              <label className="notesField" style={{ gridColumn: 'span 2' }}>Notes<input className="form-control" value={form.notes || ''} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label>
             </>
           )}
         </div>
         {allWarnings.length > 0 && (
           <div className="warnings">
             {allWarnings.map((warning, index) => {
-              const isMismatch = warning.type === 'salary_mismatch' || warning.type === 'freelance_mismatch';
+              const isMismatch = warning.type === 'salary_mismatch' || warning.type === 'freelance_mismatch' || warning.type === 'expense_mismatch';
               return (
                 <div key={index} className="warning-item d-flex align-items-center justify-content-between flex-wrap gap-2">
                   <span>{warning.message}</span>

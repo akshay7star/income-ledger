@@ -1,5 +1,8 @@
+import json
+
 from backend.app.repositories import validation_warnings
 from backend.app.repositories import dashboard_data
+from backend.app.repositories import confirm_extraction
 
 
 class FakeConnection:
@@ -11,6 +14,14 @@ class FakeConnection:
 
     def fetchone(self):
         return self.existing
+
+
+class FakeRow(dict):
+    def keys(self):
+        return super().keys()
+
+    def __getitem__(self, key):
+        return dict.__getitem__(self, key)
 
 
 def test_validation_warns_for_duplicate_period():
@@ -42,14 +53,92 @@ def test_validation_warns_for_missing_freelance_tds_only():
     assert "No TDS was recorded for this freelance invoice." in warnings
 
 
+def test_confirm_freelance_preserves_gst_metadata(monkeypatch):
+    class FakeCursor:
+        lastrowid = 7
+
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class ConfirmConnection:
+        def __init__(self):
+            self.insert_params = None
+            self.updated_json = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=()):
+            if "SELECT * FROM documents" in query:
+                return FakeCursor(FakeRow({
+                    "id": 10,
+                    "original_name": "invoice.pdf",
+                    "stored_path": "data/uploads/invoice.pdf",
+                    "file_hash": "hash",
+                    "document_type": "freelance_invoice",
+                    "status": "needs_review",
+                    "extracted_text": "",
+                    "extracted_json": "{}",
+                    "detected_user_id": 1,
+                    "confidence": 0.9,
+                    "warnings": "[]",
+                    "uploaded_at": "2026-04-29",
+                }))
+            if "INSERT INTO income_records" in query:
+                self.insert_params = params
+                return FakeCursor()
+            if "UPDATE documents SET status = 'confirmed'" in query:
+                self.updated_json = params[1]
+                return FakeCursor()
+            if "SELECT * FROM income_records" in query:
+                return FakeCursor(FakeRow({
+                    "id": 7,
+                    "user_id": 1,
+                    "document_id": 10,
+                    "financial_year": "FY 2026-27",
+                    "record_date": "2026-04-29",
+                    "period_label": "Apr 2026",
+                    "income_type": "freelance_invoice",
+                    "payer": "Gen Aquarius Private Limited",
+                    "gross_amount": 283333.0,
+                    "net_amount": 254999.7,
+                    "tds_amount": 28333.3,
+                    "deductions_amount": 0.0,
+                    "metadata_json": self.updated_json,
+                    "created_at": "2026-04-29",
+                }))
+            return FakeCursor()
+
+        def commit(self):
+            pass
+
+    conn = ConfirmConnection()
+    monkeypatch.setattr("backend.app.repositories.get_connection", lambda: conn)
+    row = confirm_extraction(10, {
+        "user_id": 1,
+        "income_type": "freelance_invoice",
+        "record_date": "2026-04-29",
+        "payer": "Gen Aquarius Private Limited",
+        "gross_amount": 283333.0,
+        "net_amount": 283333.0,
+        "tds_amount": 28333.3,
+        "gst_amount": 50999.94,
+        "deductions_amount": 0,
+    })
+
+    metadata = json.loads(conn.updated_json)
+    assert metadata["gst_amount"] == 50999.94
+    assert metadata["net_amount"] == 254999.7
+    assert row["metadata_json"] == conn.updated_json
+
+
 def test_dashboard_sums_pf_and_vpf_from_record_metadata(monkeypatch):
-    class FakeRow(dict):
-        def keys(self):
-            return super().keys()
-
-        def __getitem__(self, key):
-            return dict.__getitem__(self, key)
-
     class FakeCursor:
         def __init__(self, rows):
             self.rows = rows
@@ -128,4 +217,34 @@ def test_validation_salary_mismatch_warns():
         "Apr 2026",
     )
     assert "Gross salary minus deductions and taxes does not closely match net amount." in warnings
+
+
+def test_validation_expense_mismatch_warns():
+    warnings = validation_warnings(
+        FakeConnection(),
+        1,
+        {
+            "income_type": "purchase_expense",
+            "gross_amount": 1000,
+            "net_amount": 1180,
+            "gst_amount": 180,
+        },
+        "FY 2026-27",
+        "Apr 2026",
+    )
+    assert not warnings  # 1000 + 180 = 1180 matches net, no warnings
+
+    warnings = validation_warnings(
+        FakeConnection(),
+        1,
+        {
+            "income_type": "purchase_expense",
+            "gross_amount": 1000,
+            "net_amount": 1000,
+            "gst_amount": 180,
+        },
+        "FY 2026-27",
+        "Apr 2026",
+    )
+    assert "Gross amount plus GST does not closely match net amount." in warnings
 
