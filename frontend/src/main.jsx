@@ -5,6 +5,7 @@ import {
   BarChart3,
   Calculator,
   Check,
+  Edit,
   FileDown,
   FileText,
   IndianRupee,
@@ -14,6 +15,7 @@ import {
   Trash2,
   Upload,
   UserPlus,
+  X,
 } from 'lucide-react';
 import {
   Bar,
@@ -140,29 +142,81 @@ function App() {
   const [selectedYear, setSelectedYear] = useState('');
   const [dashboard, setDashboard] = useState(null);
   const [reviewDoc, setReviewDoc] = useState(null);
-  const [status, setStatus] = useState('');
-  const [uploadJobs, setUploadJobs] = useState([]);
+  const [editUser, setEditUser] = useState(null);
+  const [status, setStatus] = useState(() => {
+    try {
+      return sessionStorage.getItem('income-ledger-status') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [uploadJobs, setUploadJobs] = useState(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem('income-ledger-upload-jobs')) || [];
+    } catch {
+      return [];
+    }
+  });
   const [theme, setTheme] = useState(() => localStorage.getItem('income-ledger-theme') || 'light');
   const selectedUserRef = useRef(selectedUser);
   const selectedYearRef = useRef(selectedYear);
 
   async function refresh() {
-    const [userData, docData, yearData] = await Promise.all([
+    const [userData, docData] = await Promise.all([
       api('/users'),
       api('/documents'),
-      api('/financial-years'),
     ]);
     setUsers(userData);
     setDocuments(docData);
-    setYears(yearData);
-    if (!selectedYearRef.current && yearData.length) setSelectedYear(yearData[0]);
-    const year = selectedYearRef.current || yearData[0];
+
+    const yearData = await api(`/financial-years?user_id=${selectedUserRef.current}`);
+    const finalYears = yearData.length ? yearData : [financialYearForDate(new Date())];
+    setYears(finalYears);
+
+    let year = selectedYearRef.current;
+    if (!finalYears.includes(year)) {
+      year = finalYears[0];
+      setSelectedYear(year);
+    }
+
     let dashboardData = null;
     if (year) {
       dashboardData = await api(`/dashboard/${selectedUserRef.current}/${encodeURIComponent(year)}`);
       setDashboard(dashboardData);
     }
-    return { users: userData, documents: docData, years: yearData, dashboard: dashboardData };
+
+    setUploadJobs((currentJobs) => {
+      let loadedJobs = currentJobs;
+      if (loadedJobs.length === 0) {
+        try {
+          loadedJobs = JSON.parse(sessionStorage.getItem('income-ledger-upload-jobs')) || [];
+        } catch {
+          loadedJobs = [];
+        }
+      }
+      if (loadedJobs.length === 0) return [];
+
+      const updated = loadedJobs.map((job) => {
+        if (job.state === 'queued' || job.state === 'extracting') {
+          const matchingDoc = docData.find((d) => d.original_name === job.name);
+          if (matchingDoc) {
+            return {
+              ...job,
+              state: matchingDoc.status === 'confirmed' ? 'saved' : 'needs review'
+            };
+          } else {
+            return {
+              ...job,
+              state: 'failed'
+            };
+          }
+        }
+        return job;
+      });
+      return updated;
+    });
+
+    return { users: userData, documents: docData, years: finalYears, dashboard: dashboardData };
   }
 
   useEffect(() => {
@@ -170,10 +224,49 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (reviewDoc) {
+      const stillExists = documents.some((d) => d.id === reviewDoc.id);
+      if (!stillExists) {
+        setReviewDoc(null);
+      }
+    }
+  }, [documents, reviewDoc]);
+
+  useEffect(() => {
+    try {
+      if (status) {
+        sessionStorage.setItem('income-ledger-status', status);
+      } else {
+        sessionStorage.removeItem('income-ledger-status');
+      }
+    } catch {}
+  }, [status]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('income-ledger-upload-jobs', JSON.stringify(uploadJobs));
+    } catch {}
+  }, [uploadJobs]);
+
+  useEffect(() => {
     selectedUserRef.current = selectedUser;
     try {
       sessionStorage.setItem('income-ledger-selected-user', selectedUser);
     } catch {}
+
+    api(`/financial-years?user_id=${selectedUser}`)
+      .then((yearData) => {
+        const finalYears = yearData.length ? yearData : [financialYearForDate(new Date())];
+        setYears(finalYears);
+        
+        setSelectedYear((currentYear) => {
+          if (finalYears.includes(currentYear)) {
+            return currentYear;
+          }
+          return finalYears[0];
+        });
+      })
+      .catch((error) => setStatus(error.message));
   }, [selectedUser]);
 
   useEffect(() => {
@@ -304,7 +397,13 @@ function App() {
           updateUploadJob(job.id, { state: 'saved' });
         }
       }
-      setStatus(`${uploadedDocs.length} PDF${uploadedDocs.length > 1 ? 's' : ''} extracted and saved.`);
+      const anyPending = uploadedDocs.some((d) => d.status !== 'confirmed');
+      if (!anyPending) {
+        setStatus('');
+        setUploadJobs([]);
+      } else {
+        setStatus(`${uploadedDocs.length} PDF${uploadedDocs.length > 1 ? 's' : ''} processed. Some files need review.`);
+      }
     } catch (error) {
       const activeJob = jobs.find((job) => job.state !== 'saved');
       if (activeJob) updateUploadJob(activeJob.id, { state: 'failed' });
@@ -340,6 +439,25 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  async function handleDeleteUser() {
+    if (selectedUser === 'all') return;
+    const user = users.find((u) => String(u.id) === String(selectedUser));
+    if (!user) return;
+    if (window.confirm(`Are you absolutely sure you want to delete the user "${user.name}"? This will permanently delete all database records and physical PDF files stored on disk for this user.`)) {
+      try {
+        await api(`/users/${selectedUser}`, {
+          method: 'DELETE',
+        });
+        setSelectedUser('all');
+        await refresh();
+        setStatus(`User "${user.name}" and all associated records and files have been successfully deleted.`);
+      } catch (err) {
+        setStatus(err.message);
+      }
+    }
+  }
+
+
   return (
     <main className="shell container-fluid">
       <header className="topbar shadow-sm">
@@ -363,8 +481,13 @@ function App() {
         </div>
       </header>
 
-      {status && <div className="alert alert-info status">{status}</div>}
-      {uploadJobs.length > 0 && <UploadQueue jobs={uploadJobs} />}
+      {status && (
+        <div className="alert alert-info status d-flex justify-content-between align-items-center">
+          <span>{status}</span>
+          <button type="button" className="btn-close" aria-label="Close" onClick={() => setStatus('')}></button>
+        </div>
+      )}
+      {uploadJobs.length > 0 && <UploadQueue jobs={uploadJobs} onClear={() => setUploadJobs([])} />}
 
       <section className="toolbar shadow-sm">
         <select className="form-select" value={selectedUser} onChange={(event) => setSelectedUser(event.target.value)}>
@@ -373,6 +496,28 @@ function App() {
             <option key={user.id} value={user.id}>{user.name}</option>
           ))}
         </select>
+        {selectedUser !== 'all' && (
+          <button
+            className="btn btn-outline-secondary"
+            title="Edit user profile"
+            type="button"
+            onClick={() => setEditUser(users.find((u) => String(u.id) === String(selectedUser)))}
+            style={{ padding: '10px 14px' }}
+          >
+            <Edit size={16} />
+          </button>
+        )}
+        {selectedUser !== 'all' && (
+          <button
+            className="btn btn-outline-danger"
+            title="Delete user and all data"
+            type="button"
+            onClick={handleDeleteUser}
+            style={{ padding: '10px 14px' }}
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
         <select className="form-select" value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}>
           {years.map((year) => (
             <option key={year} value={year}>{year}</option>
@@ -401,6 +546,14 @@ function App() {
             const nextPending = refreshed.documents.find((doc) => doc.status !== 'confirmed' && doc.id !== reviewDoc.id);
             setReviewDoc(nextPending || null);
           }}
+        />
+      )}
+
+      {editUser && (
+        <EditUserModal
+          user={editUser}
+          onClose={() => setEditUser(null)}
+          onSaved={refresh}
         />
       )}
     </main>
@@ -445,7 +598,10 @@ function NewUserForm({ onCreated }) {
       <input className="form-control" placeholder="PAN" value={form.pan} onChange={(e) => setForm({ ...form, pan: e.target.value })} />
       <input className="form-control" placeholder="Aliases" value={form.aliases} onChange={(e) => setForm({ ...form, aliases: e.target.value })} />
       <input className="form-control" placeholder="Employer/client hints" value={form.profile_hints} onChange={(e) => setForm({ ...form, profile_hints: e.target.value })} />
-      <button className="btn btn-success" type="submit"><Check size={16} /></button>
+      <div className="d-flex gap-2">
+        <button className="btn btn-success" type="submit"><Check size={16} /></button>
+        <button className="btn btn-outline-secondary" type="button" title="Cancel" onClick={() => { setForm({ name: '', pan: '', aliases: '', profile_hints: '' }); setOpen(false); }}><X size={16} /></button>
+      </div>
     </form>
   );
 }
@@ -485,7 +641,10 @@ function ExpenseForm({ users, selectedUser, onCreated }) {
       <input className="form-control" type="number" placeholder="Amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
       <input className="form-control" type="number" placeholder="GST claim" value={form.gst_amount} onChange={(e) => setForm({ ...form, gst_amount: e.target.value })} />
       <input className="form-control" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-      <button className="btn btn-success" type="submit"><Check size={16} /></button>
+      <div className="d-flex gap-2">
+        <button className="btn btn-success" type="submit"><Check size={16} /></button>
+        <button className="btn btn-outline-secondary" type="button" title="Cancel" onClick={() => { setForm({ user_id: selectedUser === 'all' ? '' : selectedUser, expense_date: '', category: '', amount: '', gst_amount: '', notes: '' }); setOpen(false); }}><X size={16} /></button>
+      </div>
     </form>
   );
 }
@@ -503,6 +662,7 @@ function Dashboard({ dashboard }) {
         <Metric icon={<BarChart3 />} label="Current total income" value={currency(summary.total_income)} />
         <Metric icon={<IndianRupee />} label="Total expenses" value={currency(summary.total_expenses || summary.freelance_expenses)} />
         <Metric icon={<IndianRupee />} label="GST input claims" value={currency(summary.expense_gst_claims)} />
+        <Metric icon={<IndianRupee />} label="Total GST collected" value={currency(summary.freelance_gst_collected)} />
         <Metric icon={<IndianRupee />} label="Salary standard deduction" value={currency(summary.salary_standard_deduction)} />
         <Metric icon={<BarChart3 />} label="Taxable income" value={currency(summary.taxable_income)} />
         <Metric icon={<IndianRupee />} label={`Estimated tax (${tax.regime})`} value={currency(tax.total_tax)} />
@@ -554,7 +714,7 @@ function Dashboard({ dashboard }) {
               <Bar name="Salary" dataKey="salary" fill="url(#gradSalary)" radius={[5, 5, 0, 0]} />
               <Bar name="Freelance" dataKey="freelance" fill="url(#gradFreelance)" radius={[5, 5, 0, 0]} />
               <Bar name="Expenses" dataKey="expenses" fill="url(#gradExpenses)" radius={[5, 5, 0, 0]} />
-              <Bar name="GST" dataKey="expense_gst" fill="url(#gradGst)" radius={[5, 5, 0, 0]} />
+              <Bar name="GST" dataKey="gst" fill="url(#gradGst)" radius={[5, 5, 0, 0]} />
               <Bar name="PF" dataKey="pf" fill="url(#gradPf)" radius={[5, 5, 0, 0]} />
               <Bar name="VPF" dataKey="vpf" fill="url(#gradVpf)" radius={[5, 5, 0, 0]} />
             </BarChart>
@@ -1070,6 +1230,63 @@ function ReviewModal({ document, users, onClose, onSaved }) {
           <button className="btn btn-primary" type="submit"><Check size={16} /> Save record</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function EditUserModal({ user, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: user.name || '',
+    pan: user.pan || '',
+    aliases: user.aliases || '',
+    profile_hints: user.profile_hints || '',
+  });
+  const [error, setError] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    try {
+      await api(`/users/${user.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <div className="modalBackdrop">
+      <div className="modal shadow-lg" style={{ maxWidth: '500px' }}>
+        <h2>Edit User</h2>
+        <p>Update profile details for {user.name}</p>
+        {error && <div className="alert alert-danger">{error}</div>}
+        <form onSubmit={submit}>
+          <div className="mb-3">
+            <label className="form-label">Name</label>
+            <input className="form-control w-100" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+          </div>
+          <div className="mb-3">
+            <label className="form-label">PAN</label>
+            <input className="form-control w-100" value={form.pan} onChange={(e) => setForm({ ...form, pan: e.target.value })} />
+          </div>
+          <div className="mb-3">
+            <label className="form-label">Aliases</label>
+            <input className="form-control w-100" value={form.aliases} onChange={(e) => setForm({ ...form, aliases: e.target.value })} placeholder="e.g. Akshay Bhatnagar, Bhatnagar Akshay" />
+          </div>
+          <div className="mb-3">
+            <label className="form-label">Employer/client hints</label>
+            <input className="form-control w-100" value={form.profile_hints} onChange={(e) => setForm({ ...form, profile_hints: e.target.value })} placeholder="e.g. GenAQ, Bharti Airtel" />
+          </div>
+          <div className="d-flex justify-content-end gap-2 mt-4">
+            <button className="btn btn-outline-secondary" type="button" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" type="submit">Save Changes</button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

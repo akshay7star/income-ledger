@@ -26,6 +26,8 @@ from .repositories import (
     confirm_extraction,
     create_document,
     create_user,
+    update_user,
+    delete_user,
     dashboard_data,
     delete_document,
     delete_expense,
@@ -44,7 +46,11 @@ app = FastAPI(title="Income Ledger API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+        "http://localhost:5175", "http://127.0.0.1:5175"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -92,15 +98,26 @@ def _contains_name(text: str | None, name: str | None) -> bool:
 
 
 def should_save_invoice_as_expense(extraction: dict, selected_user: dict | None) -> bool:
-    if not selected_user or extraction.get("document_type") != "freelance_invoice":
+    if not selected_user:
         return False
+    doc_type = extraction.get("document_type")
+    if doc_type == "salary":
+        return False
+    if doc_type == "purchase_expense":
+        return True
+    if doc_type != "freelance_invoice":
+        return False
+
     seller_name = extraction.get("name")
     seller_pan = (extraction.get("pan") or "").upper().strip()
     user_pan = (selected_user.get("pan") or "").upper().strip()
     if user_pan and seller_pan == user_pan:
         return False
-    if _contains_name(seller_name, selected_user.get("name")):
+
+    from .repositories import name_similarity
+    if seller_name and name_similarity(seller_name, selected_user.get("name")) >= 0.75:
         return False
+
     buyer_text = " ".join(str(extraction.get(key) or "") for key in ["payer", "extracted_text"])
     return _contains_name(buyer_text, selected_user.get("name")) or bool(seller_name or seller_pan)
 
@@ -133,6 +150,23 @@ def users() -> list[dict]:
 @app.post("/api/users")
 def users_create(payload: UserCreate) -> dict:
     return create_user(payload.model_dump())
+
+
+@app.put("/api/users/{user_id}")
+def users_update(user_id: int, payload: UserCreate) -> dict:
+    try:
+        return update_user(user_id, payload.model_dump())
+    except KeyError:
+        raise HTTPException(status_code=404, detail="User not found")
+
+
+@app.delete("/api/users/{user_id}")
+def users_delete(user_id: int) -> dict:
+    try:
+        return delete_user(user_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="User not found")
+
 
 
 def save_and_confirm_extraction(document_id: int, extraction: dict, selected_user_id: int | None, initial_confidence: float) -> dict:
@@ -443,8 +477,8 @@ def expense_delete(expense_id: int) -> dict:
 
 
 @app.get("/api/financial-years")
-def financial_years() -> list[str]:
-    return list_financial_years()
+def financial_years(user_id: str | None = None) -> list[str]:
+    return list_financial_years(user_id)
 
 
 @app.get("/api/dashboard/{user_id}/{financial_year}")
