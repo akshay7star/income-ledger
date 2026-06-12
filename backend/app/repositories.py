@@ -38,7 +38,64 @@ def create_user(payload: dict) -> dict:
     return row_to_dict(row)
 
 
+def update_user(user_id: int, payload: dict) -> dict:
+    with get_connection() as conn:
+        existing = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+        if not existing:
+            raise KeyError("User not found")
+        
+        conn.execute(
+            """
+            UPDATE users
+            SET name = ?, pan = ?, aliases = ?, profile_hints = ?
+            WHERE id = ?
+            """,
+            (
+                payload["name"].strip(),
+                (payload.get("pan") or "").upper().strip() or None,
+                payload.get("aliases", "").strip(),
+                payload.get("profile_hints", "").strip(),
+                int(user_id),
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+    return row_to_dict(row)
+
+
+def delete_user(user_id: int) -> dict:
+    with get_connection() as conn:
+        existing = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+        if not existing:
+            raise KeyError("User not found")
+        
+        # 1. Update audit_events to disassociate user_id
+        conn.execute("UPDATE audit_events SET user_id = NULL WHERE user_id = ?", (int(user_id),))
+        
+        # 2. Find all documents associated with this user
+        docs = conn.execute("SELECT id FROM documents WHERE detected_user_id = ?", (int(user_id),)).fetchall()
+        doc_ids = [row["id"] for row in docs]
+        
+    # 3. Delete each document (unlinks file and cleans database records)
+    for doc_id in doc_ids:
+        try:
+            delete_document(doc_id)
+        except Exception:
+            pass
+            
+    # 4. Delete the user (income_records and freelance_expenses cascade delete)
+    with get_connection() as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
+        conn.commit()
+        
+    return {"deleted": True, "id": int(user_id)}
+
+
+
 def get_or_create_user_for_extraction(extraction: dict) -> tuple[int | None, float]:
+    if extraction.get("document_type") == "purchase_expense":
+        return None, 0.0
+
     matched_user_id, confidence = find_user_match(extraction)
     if matched_user_id:
         return matched_user_id, confidence
@@ -478,16 +535,25 @@ def delete_expense(expense_id: int) -> dict:
     return {"deleted": True, "id": expense_id}
 
 
-def list_financial_years() -> list[str]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT financial_year FROM income_records
+def list_financial_years(user_id: str | None = None) -> list[str]:
+    query = """
+        SELECT financial_year FROM income_records
+        UNION
+        SELECT financial_year FROM freelance_expenses
+        ORDER BY financial_year DESC
+    """
+    params = []
+    if user_id and user_id != "all":
+        query = """
+            SELECT financial_year FROM income_records WHERE user_id = ?
             UNION
-            SELECT financial_year FROM freelance_expenses
+            SELECT financial_year FROM freelance_expenses WHERE user_id = ?
             ORDER BY financial_year DESC
-            """
-        ).fetchall()
+        """
+        params = [int(user_id), int(user_id)]
+
+    with get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
     return [row["financial_year"] for row in rows] or [financial_year_for(None)]
 
 
@@ -523,6 +589,7 @@ def dashboard_data(user_id: str, financial_year: str) -> dict:
     freelance_income = sum(row["gross_amount"] for row in records if row["income_type"] == "freelance_invoice")
     freelance_expenses = sum(row["amount"] for row in expense_items)
     expense_gst_claims = sum(row.get("gst_amount") or 0 for row in expense_items)
+    freelance_gst_collected = sum(row["gst_amount"] for row in records if row["income_type"] == "freelance_invoice")
     tds_paid = sum(row["tds_amount"] for row in records)
     deductions = sum(row["deductions_amount"] for row in records)
     pf_total = sum(row["pf_amount"] for row in records if row["income_type"] == "salary")
@@ -584,6 +651,7 @@ def dashboard_data(user_id: str, financial_year: str) -> dict:
             "freelance_expenses": round(freelance_expenses, 2),
             "total_expenses": round(freelance_expenses, 2),
             "expense_gst_claims": round(expense_gst_claims, 2),
+            "freelance_gst_collected": round(freelance_gst_collected, 2),
             "expenses_excluding_gst": round(max(0.0, freelance_expenses - expense_gst_claims), 2),
             "freelance_profit": round(freelance_profit, 2),
             "salary_standard_deduction": round(standard_deduction, 2),

@@ -1,4 +1,4 @@
-from backend.app.repositories import find_user_match
+from backend.app.repositories import find_user_match, get_or_create_user_for_extraction
 
 
 def test_user_matching_empty_database_returns_no_match(tmp_path, monkeypatch):
@@ -36,3 +36,14 @@ def test_user_matching_handles_small_name_typos(monkeypatch):
     user_id, confidence = find_user_match({"name": "Aakshay Bhatnagar", "extracted_text": "Employee Name Aakshay Bhatnagar"})
     assert user_id == 7
     assert confidence >= 0.5
+
+
+def test_purchase_expense_does_not_create_user():
+    extraction = {
+        "document_type": "purchase_expense",
+        "name": "Some Vendor Services",
+        "pan": "ABCDE1234F"
+    }
+    user_id, confidence = get_or_create_user_for_extraction(extraction)
+    assert user_id is None
+    assert confidence == 0.0

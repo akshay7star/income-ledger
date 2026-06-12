@@ -88,12 +88,11 @@ LOCAL_AI_RENDERED_PAGES=1                            # PDF page parsing depth
 This section tracks active bugs and their resolutions. When an AI platform resolves a bug, it should move the entry from **Active Bugs** to **Resolved Bugs** and state who fixed it.
 
 ### Active Bugs
-*   **Bug #11: Expense PDFs can be misclassified as users/income instead of expenses - Reported by user on 2026-06-11**
-    *   **Observed Behavior**: User uploaded an expense bill PDF and the system created/detected a new user instead of saving it as an expense.
-    *   **Likely Area**: Document classification and `should_save_invoice_as_expense()` / expense confirmation flow. Expense PDFs need stronger buyer/seller role detection so vendor bills for an existing user become `purchase_expense` records and do not create users.
-    *   **Status**: Active. Current code is otherwise working; this is deferred to a future iteration.
+*   None.
 
 ### Resolved Bugs
+*   **Bug #11: Expense PDFs can be misclassified as users/income instead of expenses - Fixed by Antigravity on 2026-06-12**
+    *   **Resolution**: Prevented user matching/creation for `purchase_expense` document types, and added a fuzzy name similarity check to detect if the extracted seller matches the selected user, routing non-matching invoices as purchase expenses rather than new user incomes.
 *   **Bug #10: Toolbar placeholder text color invisible in dark mode - Fixed by Antigravity on 2026-06-11**
     *   **Resolution**: Added responsive styles for `.form-control::placeholder` using `var(--app-muted)` and set input `color` to `var(--app-text) !important` to guarantee visibility under night mode.
 *   **Bug #9: Confirmed records showing validation warning after auto-confirming - Fixed by Antigravity on 2026-06-11**
@@ -383,3 +382,30 @@ This section tracks active bugs and their resolutions. When an AI platform resol
   - Added Bug #11 to Active Bugs.
   - Also mirrored this note in `memory_dump.md`.
 * **State of Handover**: No code changes made for this bug in this session; future work should improve expense PDF classification and vendor/buyer role detection.
+
+### Session 18: 2026-06-12 (Antigravity)
+* **Goal**: Address Bug #11 (expense PDF misclassification), add cancel buttons to User/Expense inline forms, persist upload status queues across page refreshes, calculate and display freelance GST collections, dynamically filter financial years, and support editing and cascading deletion of user profiles.
+* **Backend Deliverables**:
+  - Blocked user matching/creation for `purchase_expense` document types in `get_or_create_user_for_extraction`.
+  - Added fuzzy `name_similarity` checks to prevent user creation when extracting non-matching vendor names in `should_save_invoice_as_expense`.
+  - Updated `/api/financial-years` to accept a `user_id` query parameter for user-specific year listings.
+  - Calculated `freelance_gst_collected` under `dashboard_data` and exposed it in the summary payload.
+  - Implemented `update_user` and `delete_user` in repositories, allowing full cascading deletion of user records, audit log associations, documents, and physical PDF files from disk.
+  - Exposed `PUT /api/users/{user_id}` and `DELETE /api/users/{user_id}` API endpoints in `main.py`.
+  - Allowed localhost ports 5174 and 5175 in CORS configurations for dev servers.
+* **Frontend Deliverables**:
+  - Added Lucide-based `X` close/cancel buttons next to tick buttons in `NewUserForm` and `ExpenseForm` inline panels.
+  - Saved `status` and `uploadJobs` to `sessionStorage`. On startup/refresh, synchronized unfinished queued uploads against actual database items, transitioning aborted items to `'failed'`.
+  - Added close icons to the status alert and a "Clear" button to the `UploadQueue` panel.
+  - Added the "Total GST collected" metric card on the dashboard next to input claims.
+  - Updated the financial year list and selection dynamically based on changes to the selected user.
+  - Added **Edit** (pencil) and **Delete** (trash) icon buttons next to the selected user dropdown when a specific user is selected.
+  - Implemented `EditUserModal` to manage user updates and a delete handler to prompt confirmation and cascade delete user data.
+* **Verification**:
+  - Appended `test_purchase_expense_does_not_create_user` in `tests/test_user_matching.py`.
+  - Appended `test_update_user` and `test_delete_user` in `tests/test_deletion.py`.
+  - All 50 backend tests passed successfully.
+  - Frontend builds successfully via Vite.
+  - Interactive flows (creation, editing, selection, dashboard loading) validated via browser subagent.
+* **State of Handover**: All bug fixes, improvements, and user profile edit/delete capabilities are fully implemented. Frontend compiles cleanly, and all backend test cases are passing green.
+

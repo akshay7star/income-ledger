@@ -67,3 +67,83 @@ def test_delete_document_deletes_linked_expense(monkeypatch):
     expense_delete_call = [p for q, p in conn.executed_queries if "DELETE FROM freelance_expenses" in q]
     assert len(expense_delete_call) == 1
     assert expense_delete_call[0] == (99,)
+
+
+def test_update_user(monkeypatch):
+    from backend.app.repositories import update_user
+    
+    updated_payload = None
+    class FakeCursorUpdate:
+        def __init__(self, query, params):
+            nonlocal updated_payload
+            if "UPDATE users" in query:
+                updated_payload = params
+        def fetchone(self):
+            return {
+                "id": 1,
+                "name": "Updated User",
+                "pan": "UPDATEDPAN",
+                "aliases": "alias1",
+                "profile_hints": "hint1"
+            }
+            
+    class FakeConnectionUpdate:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def execute(self, query, params=()):
+            return FakeCursorUpdate(query, params)
+        def commit(self):
+            pass
+            
+    monkeypatch.setattr("backend.app.repositories.get_connection", lambda: FakeConnectionUpdate())
+    
+    res = update_user(1, {"name": "Updated User", "pan": "UPDATEDPAN", "aliases": "alias1", "profile_hints": "hint1"})
+    assert res["name"] == "Updated User"
+    assert res["pan"] == "UPDATEDPAN"
+    assert updated_payload == ("Updated User", "UPDATEDPAN", "alias1", "hint1", 1)
+
+
+def test_delete_user(monkeypatch):
+    from backend.app.repositories import delete_user
+    
+    deleted_user_id = None
+    audit_events_updated = False
+    
+    class FakeCursorDelete:
+        def __init__(self, query, params):
+            pass
+        def fetchall(self):
+            # Return one associated document
+            return [{"id": 101}]
+        def fetchone(self):
+            return {"id": 1, "name": "User To Delete"}
+            
+    class FakeConnectionDelete:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def execute(self, query, params=()):
+            nonlocal deleted_user_id, audit_events_updated
+            if "DELETE FROM users" in query:
+                deleted_user_id = params[0]
+            elif "UPDATE audit_events SET user_id = NULL" in query:
+                audit_events_updated = True
+            return FakeCursorDelete(query, params)
+        def commit(self):
+            pass
+            
+    monkeypatch.setattr("backend.app.repositories.get_connection", lambda: FakeConnectionDelete())
+    
+    # Mock delete_document since delete_user calls it
+    delete_doc_called = []
+    monkeypatch.setattr("backend.app.repositories.delete_document", lambda doc_id: delete_doc_called.append(doc_id))
+    
+    res = delete_user(1)
+    assert res == {"deleted": True, "id": 1}
+    assert deleted_user_id == 1
+    assert audit_events_updated
+    assert delete_doc_called == [101]
+
