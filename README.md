@@ -1,6 +1,6 @@
 # Income Ledger 🪙
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![React](https://img.shields.io/badge/react-18-blue)
 ![FastAPI](https://img.shields.io/badge/fastapi-0.115-blue)
