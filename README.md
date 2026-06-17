@@ -81,6 +81,3 @@ LOCAL_MODEL=google/gemma-4-e4b
 
 This is a personal project, but I am completely open to pull requests! If you find a bug with the tax calculations, want to add support for a new type of salary slip, or improve the React frontend, feel free to open an issue or submit a PR.
 
-## 📄 License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
