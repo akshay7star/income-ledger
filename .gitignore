@@ -12,6 +12,9 @@ __pycache__/
 .agents/
 .project_history/
 project_context.md
+backup_history.md
+issue_bugs.md
+memory_dump.md
 
 # Databases
 *.db
