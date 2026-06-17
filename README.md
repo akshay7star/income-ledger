@@ -1,128 +1,86 @@
 # Income Ledger 🪙
 
-A private, local-only dashboard for managing salary slips, freelance invoices, expenses, and estimating Indian income tax. 
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.12%2B-blue)
+![React](https://img.shields.io/badge/react-18-blue)
+![FastAPI](https://img.shields.io/badge/fastapi-0.115-blue)
 
-This tool automatically extracts income information from PDF documents (like salary slips or invoices), maps earnings to the Indian financial year (April 1 – March 31), provides automated tax slab estimations for both the Old and New regimes, and projects quarterly advance tax requirements.
+**Income Ledger** is a lightning-fast, privacy-first, locally hosted dashboard designed to help Indian freelancers and salaried professionals manage their finances, estimate taxes, and keep track of documents without handing their personal data over to third-party cloud services. 
 
----
+I built this tool because I needed a simple way to automatically parse my salary slips and freelance invoices, map them to the correct Indian Financial Year (April 1 – March 31), and instantly know how much Advance Tax I owe.
 
-## 🚀 Key Features
-
-*   **Automated PDF Extraction**: Parses salary slips (extracting Basic, Gross, Net, TDS, PF, VPF, and other deductions) and freelance invoices (extracting Gross, Net, TDS, and GST).
-*   **Intelligent OCR Capabilities**: Out-of-the-box support for text-based PDFs using `pypdf`, with optional local OCR support (via Tesseract & Poppler) for scanned or image-based PDFs.
-*   **Indian Financial Year Grouping**: Automatically groups all income, deductions, and expenses into their respective Indian Financial Years (from FY 2017-18 to FY 2026-27).
-*   **Dual Regime Tax Estimation**: Compares and calculates taxes under both the Old and New tax regimes based on current and projected annual income.
-*   **Advance Tax Scheduler**: Estimates projected annual tax liability and provides an equal quarterly advance tax payment schedule (Q1–Q4).
-*   **Expense & GST Input Tracking**: Allows manual logging of business expenses and GST inputs to offset freelance earnings.
-*   **Data Portability**: Clean CSV export of compiled ledger records for direct use in Excel, Google Sheets, or for tax filing.
-*   **Local-Only Privacy**: All documents, databases, and logs are kept strictly on your local machine.
+Everything runs 100% locally on your machine. Your financial data stays yours. 🔒
 
 ---
 
-## 🛠️ Architecture & Tech Stack
+## ✨ Features
 
-The application is structured into two main components:
-
-1.  **Backend (FastAPI)**:
-    *   **FastAPI**: Serves a local REST API on `http://127.0.0.1:8001`.
-    *   **SQLite**: Local database storage using `sqlite3` (located in `data/income_ledger.sqlite3`).
-    *   **PDF Processing**: Built on `pypdf` for parsing digital PDFs and `pytesseract` + `pdf2image` for OCR operations.
-2.  **Frontend (React)**:
-    *   **Vite**: Fast, modern frontend builds.
-    *   **Bootstrap**: Clean, responsive styling with support for system-wide light/dark themes.
-    *   **Recharts**: Visualizes monthly income trends, deductions, and projected tax-to-income comparisons.
-    *   **Lucide Icons**: Modern SVG iconography.
+- **🧾 Automated PDF Extraction:** Upload your salary slips and freelance invoices. The built-in extraction engine automatically pulls Basic, Gross, Net, TDS, PF, VPF, GST, and standard deductions.
+- **🇮🇳 Indian Tax Regimes (Old vs. New):** Side-by-side comparison of your tax liability under both the Old and New tax regimes (fully updated for the Budget 2024 slabs).
+- **📅 Advance Tax Scheduler:** Never miss an advance tax deadline again. The dashboard estimates your projected annual income and provides an exact quarterly payment schedule.
+- **💼 Freelance Expense Tracking:** Easily log your business expenses and GST inputs to correctly offset your taxable freelance profits.
+- **📊 Comprehensive Data Exports:** Need to send data to your CA? Export your entire ledger into a beautifully formatted, multi-year Excel Workbook, complete with a generated Balance Sheet.
+- **🛡️ Secure Backup & Restore:** Generate complete ZIP backups of your database and uploaded documents in one click. 
+- **🔎 Built-in Audit & Validation:** Keep your books clean with automated data validation reports, activity logs, and missing PDF reconciliation.
 
 ---
 
-## 📂 Project Layout
+## 🛠️ Tech Stack
 
-*   [`backend/app/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app):
-    *   [`main.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/main.py): REST API endpoints for user creation, document uploads, expenses, and dashboard metrics.
-    *   [`extraction.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/extraction.py): Extractor regex patterns and parsing engines for salary slips and freelance invoices.
-    *   [`tax.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/tax.py): Core mathematical modules implementing tax slabs, cess, standard deductions (₹75k), and rebates (e.g., ₹12 Lakh limit for FY 2025-26 under the new regime).
-    *   [`database.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/database.py) & [`repositories.py`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/backend/app/repositories.py): SQLite schemas, migrations, and CRUD helper repositories.
-*   [`frontend/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/frontend):
-    *   [`src/main.jsx`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/frontend/src/main.jsx): Main dashboard React application, modals, forms, and charts.
-    *   [`src/styles.css`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/frontend/src/styles.css): Custom CSS stylesheets supporting both light and dark modes.
-*   [`tests/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/tests): Python test suite validating calculations, financial date boundaries, and data validations.
-*   [`data/`](file:///c:/Users/aksha/OneDrive/Desktop/Learning/Project/Income%20Ledger/data): *(Auto-generated, Git-ignored)* Local database, uploads, and application logs.
+* **Backend:** [FastAPI](https://fastapi.tiangolo.com/) powered by Python, using `pypdf` and `pytesseract` for heavy lifting and document parsing.
+* **Database:** SQLite (Requires zero configuration, stored entirely locally).
+* **Frontend:** [React](https://reactjs.org/) + [Vite](https://vitejs.dev/), styled beautifully with modern glassmorphism, responsive data tables, and dynamic dark mode support.
+* **Charts:** `Recharts` for visualizing monthly income trends and tax projections.
 
 ---
 
-## ⚙️ Quick Start
+## 🚀 Quick Start (Windows)
 
-Launch the entire suite on Windows with a single command:
+You can get the entire suite up and running locally in under a minute. 
+
+Just double-click the `Start-IncomeLedger.bat` file in the root directory, or run it via PowerShell:
 
 ```powershell
 .\Start-IncomeLedger.ps1
 ```
 
-*(Alternatively, double-click `Start-IncomeLedger.bat` to launch from file explorer.)*
-
-### What this script does:
-1.  Verifies/creates a local Python Virtual Environment (`.venv`).
-2.  Installs all required backend libraries (`requirements.txt`).
-3.  Installs all required React modules (`frontend/package.json`).
-4.  Launches the FastAPI backend server on `http://127.0.0.1:8001`.
-5.  Launches the Vite React frontend server on `http://127.0.0.1:5173`.
-6.  Opens your web browser automatically to start managing your ledger.
+**What the startup script handles for you:**
+1. Creates a local Python virtual environment (`.venv`).
+2. Installs all required backend (`requirements.txt`) and frontend (`package.json`) dependencies.
+3. Fires up the FastAPI backend on `http://127.0.0.1:8001`.
+4. Boots the Vite React frontend on `http://127.0.0.1:5173` and automatically opens your web browser.
 
 ---
 
-## 🤖 Local AI Model Configuration
+## 🧠 Smart Extraction & OCR Configuration
 
-By default, the application connects to a local instance of **LM Studio** running on `http://127.0.0.1:1234/v1` using `google/gemma-4-e4b`.
+The application uses an intelligent fallback system to extract data from your documents:
+1. **Direct Parsing:** Reads embedded text straight from digital PDFs.
+2. **Local OCR (Optional):** If a document is scanned, the app can fall back to Tesseract OCR to read the image text.
 
-The extraction pipeline is local-only:
+### How to Enable OCR for Scanned Documents:
+If you plan to upload scanned images or flattened PDFs, you will need to install two standard open-source tools:
+- **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)**: Install and add its path to your system environment variables.
+- **[Poppler](https://github.com/oschwartz10612/poppler-windows/releases/)**: Install and add the `/bin` directory to your system environment variables.
 
-1. Local Python parser reads embedded PDF text, PyMuPDF fallback text, and optional local OCR.
-2. If the local parser cannot confidently validate the document, the app sends the document to your locally hosted LM Studio model.
-3. If LM Studio also cannot produce usable fields, the document opens in manual review.
+### Local Privacy-First LM Studio Fallback
+If the standard parsers fail to confidently read a complex invoice, the app can optionally connect to a local **LM Studio** instance running on your machine to do heavy-lifting extraction—ensuring your sensitive financial data never hits the public internet.
 
-Cloud AI providers have intentionally been removed from the app.
-
-### Setting up a `.env` file
-Create a file named `.env` in the project root directory and add the following keys as needed:
+To configure local or custom service providers, create a `.env` file in your project root:
 
 ```env
-# URL for your local LM Studio server (comma-separated if using multiple local fallbacks)
-LOCAL_AI_BASE_URL=http://127.0.0.1:1234/v1
-
-# Optional local server API key, if your LM Studio setup requires one
-LOCAL_AI_API_KEY=lm-studio
-
-# The local LM Studio model name
-LOCAL_AI_MODEL=google/gemma-4-e4b
-
-# Timeout for API requests in seconds (default is 120)
-LOCAL_AI_TIMEOUT_SECONDS=120
-
-# Number of pages to render and send to the model for visual PDFs (default is 1)
-LOCAL_AI_RENDERED_PAGES=1
+# Example local LM Studio configuration
+LOCAL_API_BASE_URL=http://127.0.0.1:1234/v1
+LOCAL_API_KEY=lm-studio
+LOCAL_MODEL=google/gemma-4-e4b
 ```
 
 ---
 
-## ⚠️ Notes & OCR Setup
+## 🤝 Contributing
 
-*   **Privacy notice**: The app is intended to use only local Python extraction and a locally hosted LM Studio model. Do not configure cloud AI endpoints for this project.
-*   **Optional OCR**: To process scanned documents:
-    1.  Install **Tesseract OCR** on your PC and add its path to your system environment variables.
-    2.  Install **Poppler** (for PDF-to-image conversion) and add its `/bin` directory to your system environment variables.
+This is a personal project, but I am completely open to pull requests! If you find a bug with the tax calculations, want to add support for a new type of salary slip, or improve the React frontend, feel free to open an issue or submit a PR.
 
----
+## 📄 License
 
-## 📜 Changelog
-
-- **v0.1.2 (2026-06-09)**:
-  * Replaced the document delete confirm flow with an in-app modal so dashboard deletions trigger reliably.
-  * Corrected tax projection annualization to use elapsed financial-year months for partial-year data.
-  * Kept the selected user stable across refreshes within the same browser session.
-  * Aligned tax comparison cards with projected old/new regime values and cleaned up regime labels.
-
-- **v0.1.1 (2026-06-08)**: 
-  * Upgraded dashboard visual design (3D perspective hovers, glassmorphism panels, floating background blobs).
-  * Improved dark mode text contrast and theme-aware inputs/tables.
-  * Enhanced database deletion to cascade to freelance expenses on purchase document deletion.
-  * Added unit test suite for document/expense deletion cascades.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
