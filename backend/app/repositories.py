@@ -6,8 +6,11 @@ import sqlite3
 from pathlib import Path
 
 from .database import get_connection, row_to_dict
-from .financial_year import financial_year_for, month_label, parse_date
+from .financial_year import financial_year_for, month_label, parse_date, parse_date_strict
 from .tax import standard_deduction_for
+
+
+TAX_DOCUMENT_TYPES = {"form16_part_a", "form16_part_b", "form26as", "tax_statement_unknown"}
 
 
 def list_users() -> list[dict]:
@@ -215,6 +218,10 @@ def create_document(
     with get_connection() as conn:
         existing = conn.execute("SELECT * FROM documents WHERE file_hash = ?", (file_hash,)).fetchone()
         if existing:
+            if existing["status"] == "confirmed":
+                existing_dict = row_to_dict(existing)
+                existing_dict["duplicate"] = True
+                return existing_dict
             conn.execute(
                 """
                 UPDATE documents
@@ -286,8 +293,24 @@ def list_documents() -> list[dict]:
 
 def get_document(document_id: int) -> dict | None:
     with get_connection() as conn:
-        row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
-    return row_to_dict(row)
+        row = conn.execute(
+            """
+            SELECT d.*, u.name AS detected_user_name
+            FROM documents d
+            LEFT JOIN users u ON u.id = d.detected_user_id
+            WHERE d.id = ?
+            """,
+            (int(document_id),),
+        ).fetchone()
+    if not row:
+        return None
+    item = row_to_dict(row)
+    extracted = json.loads(item.pop("extracted_json") or "{}")
+    item["extracted"] = extracted
+    warnings = json.loads(item.get("warnings") or "[]")
+    validation_warns = extracted.get("validation_warnings", [])
+    item["warnings"] = list(set(warnings + validation_warns))
+    return item
 
 
 def delete_income_record(record_id: int) -> dict:
@@ -315,18 +338,22 @@ def delete_document(document_id: int) -> dict:
         document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if not document:
             raise KeyError("Document not found")
+        is_tax_document = (document["document_type"] or "") in TAX_DOCUMENT_TYPES
         
-        # Delete any linked freelance expenses if this document was a purchase expense
-        try:
-            extracted = json.loads(document["extracted_json"] or "{}")
-            expense_id = extracted.get("expense_id")
-            if expense_id:
-                conn.execute("DELETE FROM freelance_expenses WHERE id = ?", (int(expense_id),))
-        except Exception:
-            pass
+        if not is_tax_document:
+            # Delete any linked freelance expenses if this document was a purchase expense
+            try:
+                extracted = json.loads(document["extracted_json"] or "{}")
+                expense_id = extracted.get("expense_id")
+                if expense_id:
+                    conn.execute("DELETE FROM freelance_expenses WHERE id = ?", (int(expense_id),))
+            except Exception:
+                pass
 
         conn.execute("UPDATE audit_events SET document_id = NULL WHERE document_id = ?", (document_id,))
-        conn.execute("DELETE FROM income_records WHERE document_id = ?", (document_id,))
+        conn.execute("DELETE FROM tax_documents WHERE document_id = ?", (document_id,))
+        if not is_tax_document:
+            conn.execute("DELETE FROM income_records WHERE document_id = ?", (document_id,))
         conn.execute(
             """
             INSERT INTO audit_events (event_type, before_json, after_json)
@@ -341,7 +368,7 @@ def delete_document(document_id: int) -> dict:
     return {"deleted": True, "id": document_id}
 
 
-def validation_warnings(conn: sqlite3.Connection, user_id: int, payload: dict, financial_year: str, period: str) -> list[str]:
+def validation_warnings(conn: sqlite3.Connection, user_id: int, payload: dict, financial_year: str, period: str, exclude_record_id: int | None = None) -> list[str]:
     warnings: list[str] = []
     
     # Check duplicate only if it is salary or freelance_invoice (income records)
@@ -351,8 +378,18 @@ def validation_warnings(conn: sqlite3.Connection, user_id: int, payload: dict, f
             SELECT id FROM income_records
             WHERE user_id = ? AND financial_year = ? AND period_label = ? AND income_type = ?
               AND (? IS NULL OR document_id IS NULL OR document_id != ?)
+              AND (? IS NULL OR id != ?)
             """,
-            (user_id, financial_year, period, payload["income_type"], payload.get("document_id"), payload.get("document_id")),
+            (
+                user_id,
+                financial_year,
+                period,
+                payload["income_type"],
+                payload.get("document_id"),
+                payload.get("document_id"),
+                exclude_record_id,
+                exclude_record_id,
+            ),
         ).fetchone()
         if existing:
             warnings.append(f"Another {payload['income_type']} record already exists for {period}.")
@@ -386,7 +423,7 @@ def validation_warnings(conn: sqlite3.Connection, user_id: int, payload: dict, f
 
 
 def confirm_extraction(document_id: int, payload: dict) -> dict:
-    record_date = parse_date(payload.get("record_date"))
+    record_date = parse_date_strict(payload.get("record_date"))
     financial_year = financial_year_for(record_date)
     period = month_label(record_date)
     user_id = int(payload["user_id"])
@@ -411,9 +448,6 @@ def confirm_extraction(document_id: int, payload: dict) -> dict:
         gross = float(payload.get("gross_amount") or 0)
         tds = float(payload.get("tds_amount") or 0)
         gst = float(payload.get("gst_amount") or 0)
-        if tds == 0 and gross > 0:
-            tds = round(gross * 0.10, 2)
-            payload["tds_amount"] = tds
         payload["net_amount"] = round(gross - tds, 2)
         payload["gst_amount"] = gst
 
@@ -465,8 +499,63 @@ def confirm_extraction(document_id: int, payload: dict) -> dict:
     return row_to_dict(row)
 
 
+def add_income_record(payload: dict) -> dict:
+    record_date = parse_date_strict(payload.get("record_date"))
+    financial_year = financial_year_for(record_date)
+    period = month_label(record_date)
+    user_id = int(payload["user_id"])
+    income_type = payload["income_type"]
+
+    gross = float(payload.get("gross_amount") or 0)
+    tds = float(payload.get("tds_amount") or 0)
+    gst = float(payload.get("gst_amount") or 0)
+
+    if income_type == "freelance_invoice":
+        payload["net_amount"] = round(gross - tds, 2)
+        payload["gst_amount"] = gst
+
+    with get_connection() as conn:
+        warnings = validation_warnings(conn, user_id, payload, financial_year, period)
+        payload_with_warnings = {**payload, "validation_warnings": warnings}
+        after_json = json.dumps(payload_with_warnings)
+
+        cursor = conn.execute(
+            """
+            INSERT INTO income_records
+                (user_id, document_id, financial_year, record_date, period_label, income_type,
+                 payer, gross_amount, net_amount, tds_amount, deductions_amount, metadata_json)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                financial_year,
+                record_date.isoformat(),
+                period,
+                income_type,
+                payload.get("payer"),
+                float(payload.get("gross_amount") or 0),
+                float(payload.get("net_amount") or 0),
+                float(payload.get("tds_amount") or 0),
+                float(payload.get("deductions_amount") or 0),
+                after_json,
+            ),
+        )
+
+        # Insert audit event
+        conn.execute(
+            """
+            INSERT INTO audit_events (document_id, user_id, event_type, before_json, after_json)
+            VALUES (NULL, ?, 'add_income_record_manual', '{}', ?)
+            """,
+            (user_id, after_json),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM income_records WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return row_to_dict(row)
+
+
 def add_expense(payload: dict) -> dict:
-    expense_date = parse_date(payload.get("expense_date"))
+    expense_date = parse_date_strict(payload.get("expense_date"))
     financial_year = financial_year_for(expense_date)
     with get_connection() as conn:
         cursor = conn.execute(
@@ -494,14 +583,31 @@ def add_document_expense(document_id: int, payload: dict) -> dict:
         document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if not document:
             raise KeyError("Document not found")
-    row = add_expense(payload)
-    after_json = {
-        **payload,
-        "expense_id": row["id"],
-        "document_id": document_id,
-        "document_flow": "purchase_expense",
-    }
-    with get_connection() as conn:
+        expense_date = parse_date_strict(payload.get("expense_date"))
+        financial_year = financial_year_for(expense_date)
+        cursor = conn.execute(
+            """
+            INSERT INTO freelance_expenses (user_id, financial_year, expense_date, category, amount, gst_amount, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(payload["user_id"]),
+                financial_year,
+                expense_date.isoformat(),
+                payload["category"].strip(),
+                float(payload["amount"]),
+                float(payload.get("gst_amount") or 0),
+                payload.get("notes", ""),
+            ),
+        )
+        row = conn.execute("SELECT * FROM freelance_expenses WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        row_dict = row_to_dict(row)
+        after_json = {
+            **payload,
+            "expense_id": row_dict["id"],
+            "document_id": document_id,
+            "document_flow": "purchase_expense",
+        }
         conn.execute("DELETE FROM income_records WHERE document_id = ?", (document_id,))
         conn.execute(
             "UPDATE documents SET status = 'confirmed', document_type = 'purchase_expense', detected_user_id = ?, extracted_json = ? WHERE id = ?",
@@ -515,7 +621,7 @@ def add_document_expense(document_id: int, payload: dict) -> dict:
             (document_id, int(payload["user_id"]), document["extracted_json"], json.dumps(after_json)),
         )
         conn.commit()
-    return row
+    return row_dict
 
 
 def delete_expense(expense_id: int) -> dict:
@@ -531,6 +637,19 @@ def delete_expense(expense_id: int) -> dict:
             """,
             (row["user_id"], json.dumps(row_to_dict(row))),
         )
+        # Cascade expense deletion to documents
+        docs = conn.execute("SELECT id, extracted_json FROM documents WHERE document_type = 'purchase_expense'").fetchall()
+        for doc in docs:
+            try:
+                ext = json.loads(doc["extracted_json"] or "{}")
+                if ext.get("expense_id") == expense_id:
+                    ext.pop("expense_id", None)
+                    conn.execute(
+                        "UPDATE documents SET status = 'needs_review', extracted_json = ? WHERE id = ?",
+                        (json.dumps(ext), doc["id"])
+                    )
+            except Exception:
+                pass
         conn.commit()
     return {"deleted": True, "id": expense_id}
 
@@ -540,6 +659,8 @@ def list_financial_years(user_id: str | None = None) -> list[str]:
         SELECT financial_year FROM income_records
         UNION
         SELECT financial_year FROM freelance_expenses
+        UNION
+        SELECT financial_year FROM tax_documents
         ORDER BY financial_year DESC
     """
     params = []
@@ -548,9 +669,11 @@ def list_financial_years(user_id: str | None = None) -> list[str]:
             SELECT financial_year FROM income_records WHERE user_id = ?
             UNION
             SELECT financial_year FROM freelance_expenses WHERE user_id = ?
+            UNION
+            SELECT financial_year FROM tax_documents WHERE user_id = ?
             ORDER BY financial_year DESC
         """
-        params = [int(user_id), int(user_id)]
+        params = [int(user_id), int(user_id), int(user_id)]
 
     with get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
@@ -639,8 +762,12 @@ def dashboard_data(user_id: str, financial_year: str) -> dict:
             }
         )
 
-    freelance_profit = max(0.0, freelance_income - freelance_expenses)
-    standard_deduction = standard_deduction_for(financial_year, "auto", salary_income)
+    expenses_excluding_gst = max(0.0, freelance_expenses - expense_gst_claims)
+    freelance_profit = max(0.0, freelance_income - expenses_excluding_gst)
+    try:
+        standard_deduction = standard_deduction_for(financial_year, "auto", salary_income)
+    except KeyError:
+        standard_deduction = 0.0
     taxable_income = max(0.0, salary_income - standard_deduction + freelance_profit)
     return {
         "financial_year": financial_year,
@@ -652,7 +779,7 @@ def dashboard_data(user_id: str, financial_year: str) -> dict:
             "total_expenses": round(freelance_expenses, 2),
             "expense_gst_claims": round(expense_gst_claims, 2),
             "freelance_gst_collected": round(freelance_gst_collected, 2),
-            "expenses_excluding_gst": round(max(0.0, freelance_expenses - expense_gst_claims), 2),
+            "expenses_excluding_gst": round(expenses_excluding_gst, 2),
             "freelance_profit": round(freelance_profit, 2),
             "salary_standard_deduction": round(standard_deduction, 2),
             "taxable_income": round(taxable_income, 2),

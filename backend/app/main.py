@@ -4,12 +4,14 @@ import shutil
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from .database import UPLOAD_DIR, init_db, get_connection
+from .auth import change_pin, is_pin_configured, is_token_valid, login, logout, setup_pin, verify_app_pin
+from .backup import create_backup, list_backup_history, restore_backup
+from .database import DATA_DIR, UPLOAD_DIR, init_db, get_connection
 from .extraction import (
     extract_financial_fields,
     file_sha256,
@@ -21,6 +23,7 @@ from .extraction import (
     extraction_result_from_ai_data,
 )
 from .repositories import (
+    add_income_record,
     add_expense,
     add_document_expense,
     confirm_extraction,
@@ -39,7 +42,22 @@ from .repositories import (
     list_financial_years,
     list_users,
 )
-from .tax import calculate_quarterly_advance_tax, calculate_tax_for_financial_year, calculate_tax_options, elapsed_financial_year_months, estimate_year_end, tax_slabs_catalog
+from .tax import calculate_quarterly_advance_tax, calculate_tax_for_financial_year, calculate_tax_options, completed_financial_year_months, estimate_year_end, tax_slabs_catalog
+from .financial_year import parse_date_strict
+from .settings import get_settings, update_settings
+from .review import list_audit_events, reconciliation_report, validation_report
+from .tax_documents import (
+    activate_tax_document,
+    build_tax_extraction,
+    list_tax_documents,
+    parse_tax_statement_text,
+    resolve_tax_document_user,
+    save_tax_document_parse,
+)
+from .tax_reconciliation import tax_statement_report
+from .tax_planning import cloud_ai_analysis, cloud_ai_chat, tax_planning_report, update_planning_inputs
+from .tax_rule_updates import apply_tax_rule_update, draft_tax_rule_update
+from .workbook import create_import_template, create_workbook_export, import_workbook
 
 
 app = FastAPI(title="Income Ledger API")
@@ -69,13 +87,13 @@ class ConfirmExtraction(BaseModel):
     income_type: str
     record_date: str | None = None
     payer: str | None = None
-    gross_amount: float = 0
-    net_amount: float = 0
-    tds_amount: float = 0
-    deductions_amount: float = 0
-    pf_amount: float = 0
-    vpf_amount: float = 0
-    gst_amount: float = 0
+    gross_amount: float = Field(default=0.0, ge=0.0)
+    net_amount: float = Field(default=0.0, ge=0.0)
+    tds_amount: float = Field(default=0.0, ge=0.0)
+    deductions_amount: float = Field(default=0.0, ge=0.0)
+    pf_amount: float = Field(default=0.0, ge=0.0)
+    vpf_amount: float = Field(default=0.0, ge=0.0)
+    gst_amount: float = Field(default=0.0, ge=0.0)
     category: str | None = None
     notes: str | None = None
 
@@ -84,9 +102,323 @@ class ExpenseCreate(BaseModel):
     user_id: int
     expense_date: str
     category: str
-    amount: float
-    gst_amount: float = 0
+    amount: float = Field(..., gt=0.0)
+    gst_amount: float = Field(default=0.0, ge=0.0)
     notes: str = ""
+
+
+class IncomeRecordCreate(BaseModel):
+    user_id: int
+    income_type: str
+    record_date: str
+    payer: str | None = None
+    gross_amount: float = Field(default=0.0, ge=0.0)
+    net_amount: float = Field(default=0.0, ge=0.0)
+    tds_amount: float = Field(default=0.0, ge=0.0)
+    deductions_amount: float = Field(default=0.0, ge=0.0)
+    pf_amount: float = Field(default=0.0, ge=0.0)
+    vpf_amount: float = Field(default=0.0, ge=0.0)
+    gst_amount: float = Field(default=0.0, ge=0.0)
+
+
+class AuthPin(BaseModel):
+    pin: str = Field(min_length=4, max_length=128)
+
+
+class ChangePin(BaseModel):
+    current_pin: str = Field(min_length=4, max_length=128)
+    new_pin: str = Field(min_length=4, max_length=128)
+
+
+class SettingsUpdate(BaseModel):
+    default_user_id: str | None = None
+    default_financial_year: str | None = None
+    local_ai_base_url: str | None = None
+    local_ai_model: str | None = None
+    local_ai_timeout_seconds: int | None = None
+    local_ai_rendered_pages: int | None = None
+    cloud_ai_base_url: str | None = None
+    cloud_ai_model: str | None = None
+    cloud_ai_api_key: str | None = None
+    clear_cloud_ai_api_key: bool | None = None
+
+
+class TaxPlanningInputs(BaseModel):
+    freelance_method: str | None = None
+    advance_tax_paid: float | None = None
+    employer_nps_enabled: bool | None = None
+    employer_nps_amount: float | None = None
+    basic_da_salary: float | None = None
+    let_out_property_interest: float | None = None
+    let_out_property_rent: float | None = None
+
+
+class CloudAIMessage(BaseModel):
+    role: str
+    content: str
+
+
+class CloudAIChatRequest(BaseModel):
+    messages: list[CloudAIMessage] = []
+    total_tokens: int = 0
+
+
+class TaxRuleDraftRequest(BaseModel):
+    financial_year: str = Field(min_length=1)
+
+
+class TaxRuleApplyRequest(BaseModel):
+    draft: dict
+    app_pin: str = Field(min_length=4, max_length=128)
+
+
+PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/auth/status",
+    "/api/auth/setup",
+    "/api/auth/login",
+}
+
+
+@app.middleware("http")
+async def require_auth_token(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path in PUBLIC_API_PATHS:
+        return await call_next(request)
+    if request.url.path.startswith("/api/"):
+        token = request.headers.get("X-Income-Ledger-Token")
+        if not is_token_valid(token):
+            return JSONResponse({"detail": "Unlock Income Ledger to continue."}, status_code=401)
+    return await call_next(request)
+
+
+@app.get("/api/auth/status")
+def auth_status() -> dict:
+    return {"setup_required": not is_pin_configured()}
+
+
+@app.post("/api/auth/setup")
+def auth_setup(payload: AuthPin) -> dict:
+    try:
+        setup_pin(payload.pin)
+        token = login(payload.pin)
+        return {"token": token}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: AuthPin) -> dict:
+    try:
+        return {"token": login(payload.pin)}
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request) -> dict:
+    logout(request.headers.get("X-Income-Ledger-Token"))
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-pin")
+def auth_change_pin(payload: ChangePin) -> dict:
+    try:
+        change_pin(payload.current_pin, payload.new_pin)
+        return {"ok": True}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/settings")
+def settings_get() -> dict:
+    return get_settings()
+
+
+@app.put("/api/settings")
+def settings_put(payload: SettingsUpdate) -> dict:
+    try:
+        return update_settings(payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/backup/export")
+def backup_export() -> FileResponse:
+    backup = create_backup()
+    return FileResponse(
+        backup["path"],
+        media_type="application/zip",
+        filename=backup["filename"],
+    )
+
+
+@app.get("/api/backup/history")
+def backup_history() -> list[dict]:
+    return list_backup_history()
+
+
+@app.post("/api/backup/restore")
+def backup_restore(file: UploadFile = File(...)) -> dict:
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only Income Ledger ZIP backups are supported.")
+    safe_name = Path(file.filename).name
+    temp_path = DATA_DIR / f"restore-{safe_name}"
+    with temp_path.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    try:
+        return restore_backup(temp_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+@app.get("/api/export/workbook")
+def workbook_export(
+    user_id: str = "all",
+    financial_year: str | None = None,
+    user_ids: str | None = None,
+    financial_years: str | None = None,
+) -> FileResponse:
+    if not (financial_years or financial_year):
+        raise HTTPException(status_code=400, detail="financial_year is required")
+    try:
+        path = create_workbook_export(
+            user_id=user_id,
+            financial_year=financial_year,
+            user_ids=user_ids,
+            financial_years=financial_years,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="income-ledger-export.xlsx")
+
+
+@app.get("/api/import/template")
+def workbook_template() -> FileResponse:
+    try:
+        path = create_import_template()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="income-ledger-import-template.xlsx")
+
+
+@app.post("/api/import/workbook")
+def workbook_import(file: UploadFile = File(...)) -> dict:
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Only .xlsx workbooks are supported.")
+    temp_path = DATA_DIR / f"import-{Path(file.filename).name}"
+    with temp_path.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    try:
+        return import_workbook(temp_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+@app.get("/api/audit-events")
+def audit_events(
+    user_id: str | None = None,
+    document_id: int | None = None,
+    event_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    return list_audit_events(user_id, document_id, event_type, date_from, date_to, limit, offset)
+
+
+@app.get("/api/reconciliation")
+def reconciliation(user_id: str | None = None, financial_year: str | None = None) -> dict:
+    return reconciliation_report(user_id, financial_year)
+
+
+@app.get("/api/validation-report")
+def data_validation_report(user_id: str = "all", financial_year: str | None = None) -> dict:
+    if not financial_year:
+        raise HTTPException(status_code=400, detail="financial_year is required")
+    return validation_report(user_id, financial_year)
+
+
+@app.get("/api/tax-documents")
+def tax_documents(user_id: str | None = None, financial_year: str | None = None) -> dict:
+    return list_tax_documents(user_id, financial_year)
+
+
+@app.post("/api/tax-documents/{document_id}/activate")
+def tax_document_activate(document_id: int) -> dict:
+    try:
+        return activate_tax_document(document_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/tax-reconciliation/{user_id}/{financial_year}")
+def tax_reconciliation(user_id: str, financial_year: str) -> dict:
+    return tax_statement_report(user_id, financial_year)
+
+
+@app.get("/api/tax-planning/{user_id}/{financial_year}")
+def tax_planning(user_id: str, financial_year: str) -> dict:
+    try:
+        return tax_planning_report(user_id, financial_year)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/tax-planning/{user_id}/{financial_year}/inputs")
+def tax_planning_inputs_update(user_id: str, financial_year: str, payload: TaxPlanningInputs) -> dict:
+    try:
+        return update_planning_inputs(user_id, financial_year, payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/tax-planning/{user_id}/{financial_year}/ai-analysis")
+def tax_planning_ai_analysis(user_id: str, financial_year: str) -> dict:
+    try:
+        return cloud_ai_analysis(user_id, financial_year)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/tax-planning/{user_id}/{financial_year}/ai-chat")
+def tax_planning_ai_chat(user_id: str, financial_year: str, payload: CloudAIChatRequest) -> dict:
+    try:
+        return cloud_ai_chat(user_id, financial_year, [message.model_dump() for message in payload.messages], payload.total_tokens)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/tax-rules/ai-draft")
+def tax_rule_ai_draft(payload: TaxRuleDraftRequest) -> dict:
+    try:
+        return draft_tax_rule_update(payload.financial_year)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/tax-rules/apply")
+def tax_rule_apply(payload: TaxRuleApplyRequest) -> dict:
+    if not verify_app_pin(payload.app_pin):
+        raise HTTPException(status_code=403, detail="App PIN confirmation failed.")
+    try:
+        return apply_tax_rule_update(payload.draft)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _contains_name(text: str | None, name: str | None) -> bool:
@@ -130,6 +462,75 @@ def has_usable_extraction(extraction: dict) -> bool:
     return bool(extraction.get("name") or extraction.get("payer")) and (
         float(extraction.get("gross_amount") or 0) > 0 or float(extraction.get("net_amount") or 0) > 0
     )
+
+
+def has_valid_record_date(extraction: dict) -> bool:
+    try:
+        parse_date_strict(extraction.get("record_date"))
+        return True
+    except ValueError:
+        return False
+
+
+def duplicate_confirmed_response(document: dict) -> dict | None:
+    if document.get("duplicate") and document.get("status") == "confirmed":
+        existing = get_document(document["id"]) or document
+        existing["duplicate"] = True
+        return {
+            "success": True,
+            "duplicate": True,
+            "reason": "duplicate_confirmed",
+            "document": existing,
+        }
+    return None
+
+
+def save_tax_statement_upload(
+    safe_name: str,
+    stored_path: Path,
+    digest: str,
+    embedded_text: str,
+    warnings: list[str],
+    selected_user_id: int | None,
+) -> dict | None:
+    parsed = parse_tax_statement_text(embedded_text, warnings)
+    if not parsed:
+        return None
+    detected_user_id, user_warnings = resolve_tax_document_user(parsed, selected_user_id)
+    combined_warnings = [*warnings, *user_warnings]
+    extraction = build_tax_extraction(parsed, combined_warnings, user_id=detected_user_id)
+    document = create_document(safe_name, stored_path, digest, extraction, detected_user_id, parsed.confidence)
+    duplicate_response = duplicate_confirmed_response(document)
+    if duplicate_response:
+        duplicate_response["tax_statement"] = True
+        return duplicate_response
+    saved = save_tax_document_parse(document["id"], parsed, detected_user_id, combined_warnings)
+    return {
+        "success": saved.get("status") == "confirmed",
+        "tax_statement": True,
+        "document": saved,
+        "warnings": saved.get("warnings", []),
+    }
+
+
+def save_existing_tax_statement(
+    document_id: int,
+    embedded_text: str,
+    warnings: list[str],
+    selected_user_id: int | None,
+) -> dict | None:
+    parsed = parse_tax_statement_text(embedded_text, warnings)
+    if not parsed:
+        return None
+    detected_user_id, user_warnings = resolve_tax_document_user(parsed, selected_user_id)
+    combined_warnings = [*warnings, *user_warnings]
+    saved = save_tax_document_parse(document_id, parsed, detected_user_id, combined_warnings)
+    return {
+        "success": saved.get("status") == "confirmed",
+        "tax_statement": True,
+        "document": saved,
+        "warnings": saved.get("warnings", []),
+    }
 
 
 @app.on_event("startup")
@@ -177,6 +578,18 @@ def save_and_confirm_extraction(document_id: int, extraction: dict, selected_use
         detected_user_id, match_confidence = get_or_create_user_for_extraction(extraction)
         
     confidence = round((initial_confidence + match_confidence) / 2, 2) if detected_user_id else initial_confidence
+
+    valid_record_date = has_valid_record_date(extraction)
+    if extraction.get("record_date") and not valid_record_date:
+        extraction["warnings"] = [
+            *extraction.get("warnings", []),
+            "The extracted date is invalid. Please check and update the date manually.",
+        ]
+    elif not extraction.get("record_date"):
+        extraction["warnings"] = [
+            *extraction.get("warnings", []),
+            "No valid date was extracted. Please check and update the date manually.",
+        ]
     
     # Update document in DB with new extraction details
     with get_connection() as conn:
@@ -200,9 +613,9 @@ def save_and_confirm_extraction(document_id: int, extraction: dict, selected_use
         conn.commit()
         
     document = get_document(document_id)
-    
+
     # Check if we can auto-confirm
-    if selected_user and should_save_invoice_as_expense(extraction, selected_user) and extraction.get("record_date"):
+    if selected_user and should_save_invoice_as_expense(extraction, selected_user) and valid_record_date:
         amount = extraction.get("net_amount") or extraction.get("gross_amount") or 0
         payload = {
             "user_id": int(selected_user["id"]),
@@ -220,7 +633,7 @@ def save_and_confirm_extraction(document_id: int, extraction: dict, selected_use
             "document_type": "purchase_expense",
             "expense_amount": amount,
         }
-    elif detected_user_id and extraction.get("record_date") and extraction.get("document_type") != "unknown":
+    elif detected_user_id and valid_record_date and extraction.get("document_type") != "unknown":
         income_type = "salary" if extraction["document_type"] == "salary" else "freelance_invoice"
         payload = {
             "user_id": detected_user_id,
@@ -270,18 +683,32 @@ def upload_document(
         try:
             embedded_text, embedded_warnings = extract_embedded_pdf_text(stored_path)
             warnings = list(embedded_warnings)
+            is_scanned = not embedded_text
             
             if not embedded_text:
                 try:
-                    from pdf2image import convert_from_path
+                    import fitz
+                    from PIL import Image
+                    import io
                     import pytesseract
-                    images = convert_from_path(str(stored_path), dpi=220)
-                    ocr_text = "\n".join(pytesseract.image_to_string(image) for image in images).strip()
+                    ocr_lines = []
+                    with fitz.open(stored_path) as doc:
+                        for page in doc:
+                            pix = page.get_pixmap(dpi=220)
+                            img_data = pix.tobytes("png")
+                            img = Image.open(io.BytesIO(img_data))
+                            ocr_lines.append(pytesseract.image_to_string(img))
+                    ocr_text = "\n".join(ocr_lines).strip()
                     if ocr_text:
                         embedded_text = ocr_text
                         warnings.append("Text was extracted using local OCR fallback.")
                 except Exception as exc:
                     warnings.append(f"Local OCR fallback could not run: {exc}")
+
+            if embedded_text:
+                tax_response = save_tax_statement_upload(safe_name, stored_path, digest, embedded_text, warnings, user_id)
+                if tax_response:
+                    return tax_response
                     
             local_data = {}
             local_success = False
@@ -311,6 +738,9 @@ def upload_document(
                     "extracted_text": json.dumps(local_data)
                 }
                 document = create_document(safe_name, stored_path, digest, extraction_dict, None, 0.95)
+                duplicate_response = duplicate_confirmed_response(document)
+                if duplicate_response:
+                    return duplicate_response
                 confirmed_doc = save_and_confirm_extraction(document["id"], extraction_dict, user_id, 0.95)
                 return {"success": True, "document": confirmed_doc}
             else:
@@ -333,8 +763,11 @@ def upload_document(
                     "extracted_text": json.dumps(local_data) if local_data else ""
                 }
                 document = create_document(safe_name, stored_path, digest, extraction_dict, None, 0.25)
+                duplicate_response = duplicate_confirmed_response(document)
+                if duplicate_response:
+                    return duplicate_response
                 updated_doc = save_and_confirm_extraction(document["id"], extraction_dict, user_id, 0.25)
-                return {"success": False, "reason": "local_failed", "document": updated_doc}
+                return {"success": False, "reason": "local_failed", "is_scanned": is_scanned, "document": updated_doc}
         except Exception as exc:
             extraction_dict = {
                 "document_type": "unknown",
@@ -354,10 +787,19 @@ def upload_document(
                 "extracted_text": ""
             }
             document = create_document(safe_name, stored_path, digest, extraction_dict, None, 0.0)
+            duplicate_response = duplicate_confirmed_response(document)
+            if duplicate_response:
+                return duplicate_response
             updated_doc = save_and_confirm_extraction(document["id"], extraction_dict, user_id, 0.0)
-            return {"success": False, "reason": "local_failed", "document": updated_doc}
+            return {"success": False, "reason": "local_failed", "is_scanned": True, "document": updated_doc}
 
     # Backward compatibility / synchronous fallback
+    embedded_text, embedded_warnings = extract_embedded_pdf_text(stored_path)
+    if embedded_text:
+        tax_response = save_tax_statement_upload(safe_name, stored_path, digest, embedded_text, embedded_warnings, user_id)
+        if tax_response:
+            return tax_response
+
     extraction = extract_financial_fields(stored_path, "local").to_dict()
     selected_user = get_user(user_id) if user_id else None
     if user_id and not selected_user:
@@ -369,6 +811,9 @@ def upload_document(
         detected_user_id, match_confidence = get_or_create_user_for_extraction(extraction)
     confidence = round((extraction["confidence"] + match_confidence) / 2, 2) if detected_user_id else extraction["confidence"]
     document = create_document(safe_name, stored_path, digest, extraction, detected_user_id, confidence)
+    duplicate_response = duplicate_confirmed_response(document)
+    if duplicate_response:
+        return duplicate_response
     
     confirmed_doc = save_and_confirm_extraction(document["id"], extraction, user_id, extraction["confidence"])
     return confirmed_doc
@@ -393,15 +838,28 @@ def re_extract_document(
     
     if not embedded_text:
         try:
-            from pdf2image import convert_from_path
+            import fitz
+            from PIL import Image
+            import io
             import pytesseract
-            images = convert_from_path(str(stored_path), dpi=220)
-            ocr_text = "\n".join(pytesseract.image_to_string(image) for image in images).strip()
+            ocr_lines = []
+            with fitz.open(stored_path) as doc:
+                for page in doc:
+                    pix = page.get_pixmap(dpi=220)
+                    img_data = pix.tobytes("png")
+                    img = Image.open(io.BytesIO(img_data))
+                    ocr_lines.append(pytesseract.image_to_string(img))
+            ocr_text = "\n".join(ocr_lines).strip()
             if ocr_text:
                 embedded_text = ocr_text
                 warnings.append("Text was extracted using local OCR fallback.")
         except Exception as exc:
             warnings.append(f"Local OCR fallback could not run: {exc}")
+
+    if embedded_text:
+        tax_response = save_existing_tax_statement(document_id, embedded_text, warnings, user_id)
+        if tax_response:
+            return tax_response
             
     try:
         ai_data, ai_warnings = extract_structured_data_with_ai(stored_path, embedded_text, "local")
@@ -453,6 +911,8 @@ def extraction_confirm(document_id: int, payload: ConfirmExtraction) -> dict:
         return confirm_extraction(document_id, payload.model_dump())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/records/{record_id}")
@@ -463,9 +923,20 @@ def record_delete(record_id: int) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/records")
+def records_create(payload: IncomeRecordCreate) -> dict:
+    try:
+        return add_income_record(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/expenses")
 def expense_create(payload: ExpenseCreate) -> dict:
-    return add_expense(payload.model_dump())
+    try:
+        return add_expense(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/expenses/{expense_id}")
@@ -484,18 +955,23 @@ def financial_years(user_id: str | None = None) -> list[str]:
 @app.get("/api/dashboard/{user_id}/{financial_year}")
 def dashboard(user_id: str, financial_year: str) -> dict:
     data = dashboard_data(user_id, financial_year)
-    current_tax_options = calculate_tax_options(
-        financial_year,
-        data["summary"]["salary_income"],
-        data["summary"]["freelance_profit"],
-    )
-    tax = current_tax_options["selected"]
-    projection_months = elapsed_financial_year_months(financial_year)
-    predicted_salary = estimate_year_end(data["summary"]["salary_income"], projection_months)
-    predicted_freelance_profit = estimate_year_end(data["summary"]["freelance_profit"], projection_months)
-    predicted_tax = calculate_tax_for_financial_year(financial_year, predicted_salary, predicted_freelance_profit, tax["regime"])
-    predicted_tax_options = calculate_tax_options(financial_year, predicted_salary, predicted_freelance_profit)
-    quarterly_advance_tax = calculate_quarterly_advance_tax(predicted_tax["total_tax"])
+    try:
+        current_tax_options = calculate_tax_options(
+            financial_year,
+            data["summary"]["salary_income"],
+            data["summary"]["freelance_profit"],
+        )
+        tax = current_tax_options["selected"]
+        projection_months = completed_financial_year_months(financial_year)
+        predicted_salary = estimate_year_end(data["summary"]["salary_income"], projection_months)
+        predicted_freelance_profit = estimate_year_end(data["summary"]["freelance_profit"], projection_months)
+        predicted_tds = estimate_year_end(data["summary"]["tds_paid"], projection_months)
+        predicted_tax = calculate_tax_for_financial_year(financial_year, predicted_salary, predicted_freelance_profit, tax["regime"])
+        predicted_tax_options = calculate_tax_options(financial_year, predicted_salary, predicted_freelance_profit)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    predicted_remaining_tax = round(max(0, predicted_tax["total_tax"] - predicted_tds), 2)
+    quarterly_advance_tax = calculate_quarterly_advance_tax(predicted_remaining_tax)
     data["tax"] = {
         **tax,
         "options": predicted_tax_options["options"],
@@ -505,9 +981,11 @@ def dashboard(user_id: str, financial_year: str) -> dict:
         "remaining_tax": round(max(0, tax["total_tax"] - data["summary"]["tds_paid"]), 2),
         "predicted_salary_income": predicted_salary,
         "predicted_freelance_profit": predicted_freelance_profit,
+        "predicted_tds_paid": predicted_tds,
         "predicted_annual_income": round(predicted_salary + predicted_freelance_profit, 2),
         "predicted_taxable_income": predicted_tax["taxable_income"],
         "predicted_total_tax": predicted_tax["total_tax"],
+        "predicted_remaining_tax": predicted_remaining_tax,
         "projection_months": projection_months,
         "quarterly_advance_tax": quarterly_advance_tax,
     }
@@ -517,12 +995,15 @@ def dashboard(user_id: str, financial_year: str) -> dict:
 @app.get("/api/tax/{user_id}/{financial_year}")
 def tax(user_id: str, financial_year: str, regime: str = "auto") -> dict:
     data = dashboard_data(user_id, financial_year)
-    tax_data = calculate_tax_for_financial_year(
-        financial_year,
-        data["summary"]["salary_income"],
-        data["summary"]["freelance_profit"],
-        regime,
-    )
+    try:
+        tax_data = calculate_tax_for_financial_year(
+            financial_year,
+            data["summary"]["salary_income"],
+            data["summary"]["freelance_profit"],
+            regime,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         **tax_data,
         "tds_paid": data["summary"]["tds_paid"],

@@ -183,6 +183,63 @@ def test_dashboard_sums_pf_and_vpf_from_record_metadata(monkeypatch):
     assert data["summary"]["total_income"] == 134189.14
 
 
+def test_dashboard_freelance_profit_excludes_gst_input_from_expenses(monkeypatch):
+    class FakeCursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, _params):
+            if "income_records" in query:
+                return FakeCursor([
+                    FakeRow({
+                        "id": 1,
+                        "user_id": 1,
+                        "document_id": 1,
+                        "financial_year": "FY 2026-27",
+                        "record_date": "2026-04-01",
+                        "period_label": "Apr 2026",
+                        "income_type": "freelance_invoice",
+                        "payer": "Client",
+                        "gross_amount": 100000.0,
+                        "net_amount": 90000.0,
+                        "tds_amount": 10000.0,
+                        "deductions_amount": 0.0,
+                        "metadata_json": '{"gst_amount": 18000}',
+                        "created_at": "2026-04-01",
+                    })
+                ])
+            if "freelance_expenses" in query:
+                return FakeCursor([
+                    FakeRow({
+                        "id": 1,
+                        "user_id": 1,
+                        "financial_year": "FY 2026-27",
+                        "expense_date": "2026-04-02",
+                        "category": "Software",
+                        "amount": 11800.0,
+                        "gst_amount": 1800.0,
+                        "notes": "Tool",
+                    })
+                ])
+            return FakeCursor([])
+
+    monkeypatch.setattr("backend.app.repositories.get_connection", lambda: FakeConnection())
+    data = dashboard_data("all", "FY 2026-27")
+    assert data["summary"]["total_expenses"] == 11800
+    assert data["summary"]["expenses_excluding_gst"] == 10000
+    assert data["summary"]["freelance_profit"] == 90000
+
+
 def test_validation_freelance_mismatch_warns():
     warnings = validation_warnings(
         FakeConnection(),
@@ -247,4 +304,69 @@ def test_validation_expense_mismatch_warns():
         "Apr 2026",
     )
     assert "Gross amount plus GST does not closely match net amount." in warnings
+
+
+def test_add_income_record_manual(monkeypatch):
+    class FakeCursor:
+        lastrowid = 15
+        def __init__(self, row=None):
+            self.row = row
+        def fetchone(self):
+            return self.row
+
+    class AddConnection:
+        def __init__(self):
+            self.inserted = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=()):
+            if "INSERT INTO income_records" in query:
+                self.inserted = params
+                return FakeCursor()
+            if "SELECT * FROM income_records" in query:
+                return FakeCursor(FakeRow({
+                    "id": 15,
+                    "user_id": 1,
+                    "document_id": None,
+                    "financial_year": "FY 2026-27",
+                    "record_date": "2026-05-31",
+                    "period_label": "May 2026",
+                    "income_type": "freelance_invoice",
+                    "payer": "Manual Client",
+                    "gross_amount": 50000.0,
+                    "net_amount": 45000.0,
+                    "tds_amount": 5000.0,
+                    "deductions_amount": 0.0,
+                    "metadata_json": "{}",
+                }))
+            return FakeCursor()
+
+        def commit(self):
+            pass
+
+    conn = AddConnection()
+    monkeypatch.setattr("backend.app.repositories.get_connection", lambda: conn)
+
+    from backend.app.repositories import add_income_record
+    row = add_income_record({
+        "user_id": 1,
+        "income_type": "freelance_invoice",
+        "record_date": "2026-05-31",
+        "payer": "Manual Client",
+        "gross_amount": 50000.0,
+        "net_amount": 50000.0,
+        "tds_amount": 5000.0,
+        "gst_amount": 0.0,
+    })
+
+    assert row["id"] == 15
+    assert row["payer"] == "Manual Client"
+    assert row["gross_amount"] == 50000.0
+    assert row["net_amount"] == 45000.0
+    assert row["document_id"] is None
 

@@ -75,7 +75,51 @@ body {
     radial-gradient(at 50% 100%, rgba(244, 63, 94, 0.04) 0px, transparent 50%);
   background-attachment: fixed;
   overflow-x: hidden;
-  perspective: 1000px;
+}
+
+.authPage {
+  align-items: center;
+  display: flex;
+  min-height: 100vh;
+  justify-content: center;
+}
+
+.authShell {
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 16px;
+  max-width: 420px;
+  padding: 28px;
+  width: min(100%, 420px);
+}
+
+.authShell h1 {
+  color: var(--app-heading);
+  font-size: 26px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.authShell p {
+  color: var(--app-muted);
+  margin: 0;
+}
+
+.linkButton {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  color: var(--bs-link-color);
+  font: inherit;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+}
+
+.linkButton:hover {
+  color: var(--bs-link-hover-color);
 }
 
 /* Background floating 3D ambient blobs */
@@ -175,6 +219,56 @@ textarea {
   justify-content: space-between;
   padding: 24px 32px;
   margin-bottom: 24px;
+}
+
+.topActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.viewNav {
+  align-items: center;
+  background: var(--app-surface);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  box-shadow: var(--app-shadow);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+  padding: 10px;
+}
+
+.viewNavButton {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--app-muted);
+  display: inline-flex;
+  font-weight: 750;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 14px;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.viewNavButton:hover {
+  background: var(--app-surface-2);
+  border-color: var(--app-border);
+  color: var(--app-text);
+  transform: translateY(-1px);
+}
+
+.viewNavButton.active {
+  background: var(--app-primary-soft);
+  border-color: rgba(99, 102, 241, 0.32);
+  color: var(--app-primary);
 }
 
 h1, h2, h3, h4, p {
@@ -313,6 +407,17 @@ h1 {
   animation: none;
 }
 
+.uploadJob.interactive {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.uploadJob.needs-review.interactive:hover {
+  border-color: #fbbf24;
+  background: rgba(245, 158, 11, 0.16);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.1);
+}
+
 @keyframes pulseLight {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.75; }
@@ -369,19 +474,80 @@ h1 {
   min-width: 155px;
 }
 
+.dashboardHeader {
+  align-items: center;
+  background: var(--app-surface);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  box-shadow: var(--app-shadow);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 18px 22px;
+}
+
+.dashboardHeader h2 {
+  justify-content: flex-start;
+  margin-bottom: 4px;
+}
+
+.dashboardHeader p {
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
+.segmentedControl {
+  align-items: center;
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+}
+
+.segmentedControl button {
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  color: var(--app-muted);
+  font-size: 13px;
+  font-weight: 800;
+  min-height: 36px;
+  padding: 8px 13px;
+  white-space: nowrap;
+}
+
+.segmentedControl button.active {
+  background: var(--app-primary);
+  box-shadow: 0 8px 18px rgba(99, 102, 241, 0.2);
+  color: #fff;
+}
+
 /* Metric Cards 3D Perspective Hover */
 .metricGrid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 24px;
+  perspective: 1000px;
 }
 
 .metric {
-  min-height: 124px;
-  padding: 20px;
+  min-height: 116px;
+  padding: 18px;
   transform-style: preserve-3d;
   will-change: transform, box-shadow;
+}
+
+.metricButton {
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
 }
 
 .metric::after {
@@ -395,7 +561,7 @@ h1 {
 }
 
 .metric:hover {
-  transform: translateY(-8px) scale(1.02) rotateX(3deg) rotateY(-1deg);
+  transform: translateY(-4px);
   box-shadow: var(--app-shadow-hover);
   border-color: rgba(99, 102, 241, 0.25);
 }
@@ -415,7 +581,7 @@ h1 {
 }
 
 .metric:hover .metricIcon {
-  transform: translateZ(30px) scale(1.1);
+  transform: translateZ(24px) scale(1.06);
 }
 
 .metric span {
@@ -430,7 +596,7 @@ h1 {
 
 .metric strong {
   display: block;
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 800;
   margin-top: 6px;
   letter-spacing: -0.02em;
@@ -469,6 +635,518 @@ h1 {
 
 .panel {
   padding: 24px;
+}
+
+.settingsGrid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.8fr);
+}
+
+.settingsPanel {
+  align-content: start;
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.settingsPanel:first-child {
+  grid-row: span 2;
+}
+
+.settingsPanel h2,
+.settingsPanel h3 {
+  align-items: center;
+  color: var(--app-heading);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.settingsPanel h2 {
+  font-size: 20px;
+}
+
+.settingsPanel h3 {
+  font-size: 15px;
+}
+
+.settingsForm {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settingsForm label {
+  color: var(--app-muted);
+  display: grid;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.settingsForm .checkboxLabel {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.taxPlanner {
+  margin-bottom: 24px;
+}
+
+.taxSlabTable {
+  margin-top: 14px;
+}
+
+.settingsActions {
+  display: flex;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.taxRuleControls,
+.taxRuleApplyForm {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.taxRuleControls label,
+.taxRuleApplyForm label {
+  color: var(--app-muted);
+  display: grid;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+  min-width: 0;
+}
+
+.taxRuleDraft {
+  display: grid;
+  gap: 12px;
+}
+
+.taxRuleDraftMeta,
+.taxRuleRegime {
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.taxRuleDraftMeta strong,
+.taxRuleRegime strong {
+  align-items: center;
+  color: var(--app-heading);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.taxRuleDraftMeta span,
+.taxRuleRegime span {
+  color: var(--app-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.taxRuleRegimeList {
+  display: grid;
+  gap: 8px;
+}
+
+.taxRuleDraft details {
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
+.taxRuleDraft summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.taxRuleDraftPreview {
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  color: var(--app-text);
+  font-size: 12px;
+  margin: 10px 0 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.taxRuleWarnings {
+  margin-bottom: 0;
+}
+
+.exportModal {
+  max-width: 720px;
+}
+
+.exportSelectionGrid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 24px;
+}
+
+.exportSelectionGrid h3 {
+  color: var(--app-heading);
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+.choiceRow {
+  align-items: center;
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  color: var(--app-text);
+  display: flex;
+  font-size: 14px;
+  font-weight: 650;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+.backupHistory {
+  display: grid;
+  gap: 10px;
+}
+
+.backupHistoryRow {
+  align-items: center;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px;
+}
+
+.backupHistoryRow div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.backupHistoryRow strong,
+.backupHistoryRow span {
+  overflow-wrap: anywhere;
+}
+
+.backupHistoryRow span {
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
+.reviewToolsGrid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.reviewPanel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.reviewToolsGrid > .reviewPanel:first-child {
+  grid-column: 1 / -1;
+}
+
+.reconcileHeader {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.reconcileHeader h2 {
+  margin-bottom: 0;
+}
+
+.reconcileActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.reconcileActions button {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.reconcileLastChecked {
+  color: var(--app-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reviewFilters {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 1fr) 180px 180px auto;
+}
+
+.reviewSummary {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.reviewList {
+  display: grid;
+  gap: 10px;
+}
+
+.reviewRow {
+  align-items: center;
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.reviewRow div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.reviewRow strong,
+.reviewRow span {
+  overflow-wrap: anywhere;
+}
+
+.reviewRow span {
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
+.taxReconPanel {
+  grid-column: 1 / -1;
+}
+
+.taxReconGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin-bottom: 18px;
+}
+
+.taxReconStatus {
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.taxReconStatus.matched {
+  border-color: rgba(16, 185, 129, 0.36);
+}
+
+.taxReconStatus.missing {
+  border-color: rgba(244, 63, 94, 0.36);
+}
+
+.taxReconStatus strong {
+  color: var(--app-heading);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.taxReconStatus span {
+  color: var(--app-text);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.taxReconStatus small {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.taxReconSubsection {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.taxReconSubsection h3 {
+  color: var(--app-heading);
+  font-size: 14px;
+  font-weight: 850;
+  margin: 0;
+}
+
+.taxReconTableWrap {
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  overflow: auto;
+}
+
+.taxReconTable {
+  border-collapse: collapse;
+  min-width: 760px;
+  width: 100%;
+}
+
+.taxReconTable th,
+.taxReconTable td {
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-text);
+  font-size: 12px;
+  padding: 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.taxReconTable th {
+  background: var(--app-surface-2);
+  color: var(--app-muted);
+  font-weight: 850;
+}
+
+.taxReconTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.cloudAiPanel {
+  margin-top: 20px;
+}
+
+.aiAdvisorPanel {
+  gap: 18px;
+}
+
+.aiAdvisorHeader {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.aiAdvisorHeader h2 {
+  justify-content: flex-start;
+  margin-bottom: 6px;
+}
+
+.aiAdvisorHeader p {
+  color: var(--app-muted);
+  font-size: 13px;
+  max-width: 720px;
+}
+
+.tokenControls {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.tokenBadge {
+  background: var(--app-primary-soft);
+  border: 1px solid rgba(99, 102, 241, 0.26);
+  border-radius: 999px;
+  color: var(--app-primary);
+  font-size: 13px;
+  font-weight: 850;
+  padding: 8px 12px;
+}
+
+.aiToolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.aiToolbar span {
+  color: var(--app-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.aiAnalysis,
+.aiChatWindow {
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.aiAnalysis {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aiChatWindow {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.aiAdvisorChat {
+  min-height: 360px;
+}
+
+.aiMessage {
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.aiMessage.user {
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.aiMessage.assistant {
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+}
+
+.aiMessage strong {
+  color: var(--app-heading);
+  font-size: 13px;
+}
+
+.aiMessage span {
+  color: var(--app-text);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aiChatForm {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 h2 {
@@ -739,8 +1417,8 @@ h2 span {
   background: var(--app-surface);
 }
 
-/* Modal and Backdrop redone */
-.modalBackdrop {
+/* Custom Modal and Backdrop to prevent Bootstrap clashes */
+.ledger-modal-backdrop {
   align-items: center;
   background: rgba(9, 13, 22, 0.45);
   backdrop-filter: blur(12px);
@@ -759,7 +1437,7 @@ h2 span {
   to { opacity: 1; }
 }
 
-.modal {
+.ledger-modal {
   background: var(--app-surface);
   backdrop-filter: blur(30px);
   border: 1px solid var(--app-border);
@@ -781,14 +1459,14 @@ h2 span {
   to { transform: scale(1) translateY(0); opacity: 1; }
 }
 
-.modal h2 {
+.ledger-modal h2 {
   font-size: 22px;
   font-weight: 850;
   letter-spacing: -0.02em;
   margin-bottom: 6px;
 }
 
-.modal > p {
+.ledger-modal > p {
   color: var(--app-muted);
   font-size: 14px;
   margin-bottom: 24px;
@@ -875,6 +1553,27 @@ h2 span {
     grid-template-columns: 1fr;
   }
 
+  .settingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .reviewToolsGrid,
+  .reviewSummary,
+  .exportSelectionGrid,
+  .aiChatForm,
+  .taxRuleControls,
+  .taxRuleApplyForm {
+    grid-template-columns: 1fr;
+  }
+
+  .reviewFilters {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsPanel:first-child {
+    grid-row: auto;
+  }
+
   .metricGrid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -895,6 +1594,34 @@ h2 span {
   .topbar .actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .viewNav {
+    align-items: stretch;
+  }
+
+  .viewNavButton {
+    flex: 1 1 150px;
+    justify-content: center;
+  }
+
+  .dashboardHeader,
+  .aiAdvisorHeader,
+  .aiToolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .segmentedControl {
+    width: 100%;
+  }
+
+  .segmentedControl button {
+    flex: 1;
+  }
+
+  .settingsForm {
+    grid-template-columns: 1fr;
   }
 
   .metricGrid {

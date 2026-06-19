@@ -212,10 +212,37 @@ def test_ocr_fallback_runs_when_pdf_has_no_embedded_text(tmp_path, monkeypatch):
         pages = [EmptyPage()]
 
     fake_pypdf = SimpleNamespace(PdfReader=lambda _: FakePdfReader())
-    fake_pdf2image = SimpleNamespace(convert_from_path=lambda *_args, **_kwargs: ["image"])
-    fake_tesseract = SimpleNamespace(image_to_string=lambda _image: "Invoice amount 50,000 client: Acme")
     monkeypatch.setitem(sys.modules, "pypdf", fake_pypdf)
-    monkeypatch.setitem(sys.modules, "pdf2image", fake_pdf2image)
+
+    # Mock fitz
+    class FakePixmap:
+        def tobytes(self, fmt="png"):
+            return b"fake_png"
+
+    class FakePage:
+        def get_pixmap(self, dpi=220):
+            return FakePixmap()
+
+    class FakeDocument:
+        def __init__(self, *args, **kwargs):
+            self.pages = [FakePage()]
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+        def __iter__(self):
+            return iter(self.pages)
+        def __len__(self):
+            return len(self.pages)
+
+    fake_fitz = SimpleNamespace(open=FakeDocument)
+    monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
+
+    # Mock PIL
+    import PIL.Image
+    monkeypatch.setattr(PIL.Image, "open", lambda _io: "image")
+
+    fake_tesseract = SimpleNamespace(image_to_string=lambda _image: "Invoice amount 50,000 client: Acme")
     monkeypatch.setitem(sys.modules, "pytesseract", fake_tesseract)
 
     pdf = tmp_path / "scan.pdf"

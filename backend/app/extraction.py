@@ -178,18 +178,26 @@ def extract_text_from_pdf(path: Path, ai_provider: str = "local") -> tuple[str, 
         return ai_text, warnings
 
     try:
-        from pdf2image import convert_from_path
+        import fitz
+        from PIL import Image
+        import io
         import pytesseract
 
-        images = convert_from_path(str(path), dpi=220)
-        ocr_text = "\n".join(pytesseract.image_to_string(image) for image in images).strip()
+        ocr_lines = []
+        with fitz.open(path) as doc:
+            for page in doc:
+                pix = page.get_pixmap(dpi=220)
+                img_data = pix.tobytes("png")
+                img = Image.open(io.BytesIO(img_data))
+                ocr_lines.append(pytesseract.image_to_string(img))
+        ocr_text = "\n".join(ocr_lines).strip()
         if ocr_text:
             warnings.append("Text was extracted using OCR fallback.")
             return ocr_text, warnings
         warnings.append("OCR ran, but no readable text was found.")
     except Exception as exc:  # noqa: BLE001
         warnings.append(
-            "OCR fallback is available but could not run. Install Tesseract and Poppler, "
+            "OCR fallback is available but could not run. Install Tesseract, "
             f"then retry scanned PDFs. Details: {exc}"
         )
     return "", warnings
@@ -337,17 +345,19 @@ def extract_structured_data_with_ai(path: Path, embedded_text: str = "", ai_prov
 
 def render_pdf_pages_for_ai(path: Path, warnings: list[str]) -> list[str]:
     try:
-        from pdf2image import convert_from_path
+        import io
+        import fitz
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            images = convert_from_path(str(path), dpi=170, first_page=1, last_page=LOCAL_AI_RENDERED_PAGES, fmt="png", output_folder=temp_dir)
-            image_urls = []
-            for image in images:
-                image_path = Path(temp_dir) / f"page-{len(image_urls) + 1}.png"
-                image.save(image_path, "PNG")
-                encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        image_urls = []
+        with fitz.open(path) as doc:
+            num_pages = min(len(doc), LOCAL_AI_RENDERED_PAGES)
+            for i in range(num_pages):
+                page = doc.load_page(i)
+                pix = page.get_pixmap(dpi=170)
+                png_data = pix.tobytes("png")
+                encoded = base64.b64encode(png_data).decode("ascii")
                 image_urls.append(f"data:image/png;base64,{encoded}")
-            return image_urls
+        return image_urls
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"Could not render PDF pages for local AI analysis: {exc}")
         return []
@@ -710,7 +720,7 @@ def find_amount(text: str, key: str) -> float:
             amounts = extract_currency_amounts_from_line(line)
             if amounts:
                 return amounts[0]
-        if key == "invoice_amount" and normalized.startswith("total "):
+        if key == "invoice_amount" and normalized.strip().startswith("total "):
             amounts = extract_currency_amounts_from_line(line)
             if len(amounts) == 1:
                 return amounts[0]
@@ -912,6 +922,7 @@ def run_local_parser(text: str) -> dict:
     gst = find_amount(text, "gst_amount")
     if doc_type == "salary":
         gst = 0.0
+    parsed_net = net
     if doc_type in ("freelance_invoice", "purchase_expense") and gst == 0 and net > gross:
         gst = round(net - gross, 2)
         
@@ -933,6 +944,7 @@ def run_local_parser(text: str) -> dict:
         "record_date": record_date,
         "gross_amount": gross,
         "net_amount": net,
+        "parsed_net_amount": parsed_net,
         "tds_amount": tds,
         "deductions_amount": deductions,
         "pf_amount": pf,
@@ -964,8 +976,13 @@ def validate_local_extraction(data: dict) -> bool:
         
     if doc_type == "freelance_invoice":
         tds = data.get("tds_amount", 0.0)
-        expected_net = gross - tds
-        return abs(expected_net - net) <= 10.0
+        gst = data.get("gst_amount", 0.0)
+        physical_net = data.get("parsed_net_amount", net)
+        return (
+            abs((gross - tds) - physical_net) <= 10.0 or
+            abs((gross + gst - tds) - physical_net) <= 10.0 or
+            abs((gross + gst) - physical_net) <= 10.0
+        )
         
     if doc_type == "purchase_expense":
         gst = data.get("gst_amount", 0.0)
@@ -982,14 +999,22 @@ def extract_financial_fields(path: Path, ai_provider: str = "local") -> Extracti
     embedded_text, embedded_warnings = extract_embedded_pdf_text(path)
     warnings.extend(embedded_warnings)
     
-    # 2. If no embedded text found, run PyMuPDF/pdf2image local OCR fallback
+    # 2. If no embedded text found, run PyMuPDF/Pillow local OCR fallback
     if not embedded_text:
         try:
-            from pdf2image import convert_from_path
+            import fitz
+            from PIL import Image
+            import io
             import pytesseract
             
-            images = convert_from_path(str(path), dpi=220)
-            ocr_text = "\n".join(pytesseract.image_to_string(image) for image in images).strip()
+            ocr_lines = []
+            with fitz.open(path) as doc:
+                for page in doc:
+                    pix = page.get_pixmap(dpi=220)
+                    img_data = pix.tobytes("png")
+                    img = Image.open(io.BytesIO(img_data))
+                    ocr_lines.append(pytesseract.image_to_string(img))
+            ocr_text = "\n".join(ocr_lines).strip()
             if ocr_text:
                 embedded_text = ocr_text
                 warnings.append("Text was extracted using local OCR fallback.")

@@ -16,6 +16,15 @@ def parse_date(value: str | None) -> date:
     return date.today()
 
 
+def parse_date_strict(value: str | None) -> date:
+    if not value or not value.strip():
+        raise ValueError("A valid date is required.")
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("Date must use YYYY-MM-DD format.") from exc
+
+
 def financial_year_for(value: date | str | None) -> str:
     target = parse_date(value) if isinstance(value, str) or value is None else value
     start_year = target.year if target.month >= 4 else target.year - 1

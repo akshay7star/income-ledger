@@ -1,83 +1,131 @@
-# Income Ledger 🪙
+# Income Ledger
 
+Income Ledger is a local-first finance dashboard for Indian salaried and freelance professionals. It helps parse salary slips, freelance invoices, Form 16 Part A/B, and Form 26AS; reconcile records against source documents; estimate tax; and export clean workbook data without sending private financial documents to a third-party service by default.
 
-![Python](https://img.shields.io/badge/python-3.12%2B-blue)
-![React](https://img.shields.io/badge/react-18-blue)
-![FastAPI](https://img.shields.io/badge/fastapi-0.115-blue)
+The app runs on your machine with a FastAPI backend, SQLite database, and React/Vite frontend.
 
-**Income Ledger** is a lightning-fast, privacy-first, locally hosted dashboard designed to help Indian freelancers and salaried professionals manage their finances, estimate taxes, and keep track of documents without handing their personal data over to third-party cloud services. 
+## Features
 
-I built this tool because I needed a simple way to automatically parse my salary slips and freelance invoices, map them to the correct Indian Financial Year (April 1 – March 31), and instantly know how much Advance Tax I owe.
+- **PDF income extraction**: Upload salary slips and freelance invoices to extract gross, net, TDS, PF, VPF, GST, deductions, payer/client, and date fields.
+- **Manual review before save**: Extracted income data is reviewed and confirmed by the user before it becomes ledger data.
+- **Form 16 and 26AS reconciliation**:
+  - Upload multiple Form 16 Part A/B documents for multiple employers in the same financial year.
+  - Keep one active Form 26AS per user and financial year, with superseded statements preserved until deleted.
+  - Compare employer salary totals, TDS, Form 16 totals, 26AS section 192 rows, and ledger salary records.
+  - Show month-level mismatch details so the user can see exactly which month differs from 26AS.
+  - Keep reconciliation advisory-only. The app suggests what to review but does not auto-update salary records from 26AS.
+  - Delete Form 16/26AS documents from Reconcile without deleting salary or freelance records.
+- **Freelance and professional TDS checks**: Compare ledger freelance receipts/TDS against 26AS professional/contract sections where available.
+- **Validation and audit tools**: Missing PDF checks, linked/unlinked document reports, validation findings, and audit history.
+- **Tax planner**: Indian FY tax estimates, regime comparison, advance-tax planning, and editable planning inputs.
+- **AI Advisor**: Optional cloud/custom AI advisory chat using structured app data. Deterministic tax calculations remain in the backend.
+- **Excel import/export**: Export multi-sheet workbooks with records, expenses, tax summaries, tax documents, tax reconciliation, and findings. Import structured workbook data.
+- **Backup and restore**: Local ZIP backups include database and uploaded documents.
+- **App lock and settings**: Local PIN/session lock, default user/FY preferences, local AI settings, and optional cloud AI settings.
 
-Everything runs 100% locally on your machine. Your financial data stays yours. 🔒
+## Tech Stack
 
----
+- **Backend**: FastAPI, Python 3.12+, SQLite
+- **PDF/OCR**: `pypdf`, PyMuPDF, optional Tesseract OCR
+- **Frontend**: React, Vite, Bootstrap, custom CSS
+- **Charts**: Recharts
+- **Workbook support**: OpenPyXL
 
-## ✨ Features
+## Quick Start on Windows
 
-- **🧾 Automated PDF Extraction:** Upload your salary slips and freelance invoices. The built-in extraction engine automatically pulls Basic, Gross, Net, TDS, PF, VPF, GST, and standard deductions.
-- **🇮🇳 Indian Tax Regimes (Old vs. New):** Side-by-side comparison of your tax liability under both the Old and New tax regimes (fully updated for the Budget 2024 slabs).
-- **📅 Advance Tax Scheduler:** Never miss an advance tax deadline again. The dashboard estimates your projected annual income and provides an exact quarterly payment schedule.
-- **💼 Freelance Expense Tracking:** Easily log your business expenses and GST inputs to correctly offset your taxable freelance profits.
-- **📊 Comprehensive Data Exports:** Need to send data to your CA? Export your entire ledger into a beautifully formatted, multi-year Excel Workbook, complete with a generated Balance Sheet.
-- **🛡️ Secure Backup & Restore:** Generate complete ZIP backups of your database and uploaded documents in one click. 
-- **🔎 Built-in Audit & Validation:** Keep your books clean with automated data validation reports, activity logs, and missing PDF reconciliation.
-
----
-
-## 🛠️ Tech Stack
-
-* **Backend:** [FastAPI](https://fastapi.tiangolo.com/) powered by Python, using `pypdf` and `pytesseract` for heavy lifting and document parsing.
-* **Database:** SQLite (Requires zero configuration, stored entirely locally).
-* **Frontend:** [React](https://reactjs.org/) + [Vite](https://vitejs.dev/), styled beautifully with modern glassmorphism, responsive data tables, and dynamic dark mode support.
-* **Charts:** `Recharts` for visualizing monthly income trends and tax projections.
-
----
-
-## 🚀 Quick Start (Windows)
-
-You can get the entire suite up and running locally in under a minute. 
-
-Just double-click the `Start-IncomeLedger.bat` file in the root directory, or run it via PowerShell:
+Run the launcher from the project root:
 
 ```powershell
 .\Start-IncomeLedger.ps1
 ```
 
-**What the startup script handles for you:**
-1. Creates a local Python virtual environment (`.venv`).
-2. Installs all required backend (`requirements.txt`) and frontend (`package.json`) dependencies.
-3. Fires up the FastAPI backend on `http://127.0.0.1:8001`.
-4. Boots the Vite React frontend on `http://127.0.0.1:5173` and automatically opens your web browser.
+Or double-click:
 
----
-
-## 🧠 Smart Extraction & OCR Configuration
-
-The application uses an intelligent fallback system to extract data from your documents:
-1. **Direct Parsing:** Reads embedded text straight from digital PDFs.
-2. **Local OCR (Optional):** If a document is scanned, the app can fall back to Tesseract OCR to read the image text.
-
-### How to Enable OCR for Scanned Documents:
-If you plan to upload scanned images or flattened PDFs, you will need to install two standard open-source tools:
-- **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)**: Install and add its path to your system environment variables.
-- **[Poppler](https://github.com/oschwartz10612/poppler-windows/releases/)**: Install and add the `/bin` directory to your system environment variables.
-
-### Local Privacy-First LM Studio Fallback
-If the standard parsers fail to confidently read a complex invoice, the app can optionally connect to a local **LM Studio** instance running on your machine to do heavy-lifting extraction—ensuring your sensitive financial data never hits the public internet.
-
-To configure local or custom service providers, create a `.env` file in your project root:
-
-```env
-# Example local LM Studio configuration
-LOCAL_API_BASE_URL=http://127.0.0.1:1234/v1
-LOCAL_API_KEY=lm-studio
-LOCAL_MODEL=google/gemma-4-e4b
+```text
+Start-IncomeLedger.bat
 ```
 
----
+The startup script:
 
-## 🤝 Contributing
+1. Creates or reuses `.venv`.
+2. Installs backend dependencies from `requirements.txt`.
+3. Installs frontend dependencies from `frontend/package.json`.
+4. Starts the backend at `http://127.0.0.1:8001`.
+5. Starts the frontend at `http://127.0.0.1:5173`.
+6. Opens the app in your browser.
 
-This is a personal project, but I am completely open to pull requests! If you find a bug with the tax calculations, want to add support for a new type of salary slip, or improve the React frontend, feel free to open an issue or submit a PR.
+## Manual Development Commands
 
+Backend:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+Frontend:
+
+```powershell
+cd frontend
+npm.cmd run dev
+```
+
+Build frontend:
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+Focused tax-document tests:
+
+```powershell
+C:\Users\aksha\AppData\Local\Programs\Python\Python312\python.exe -m pytest tests\test_tax_documents.py -q --basetemp C:\tmp\income-ledger-pytest
+```
+
+## Configuration
+
+The app reads `.env` from the project tree and also supports changing most settings from the Settings screen.
+
+Local AI extraction fallback:
+
+```env
+LOCAL_AI_BASE_URL=http://127.0.0.1:1234/v1
+LOCAL_AI_API_KEY=lm-studio
+LOCAL_AI_MODEL=google/gemma-4-e4b
+LOCAL_AI_TIMEOUT_SECONDS=120
+LOCAL_AI_RENDERED_PAGES=1
+```
+
+Optional cloud/custom AI Advisor:
+
+```env
+CLOUD_AI_BASE_URL=https://api.openai.com/v1
+CLOUD_AI_MODEL=
+```
+
+The cloud AI API key is stored through the app Settings screen and is not required for local extraction or tax calculations.
+
+## OCR Requirements
+
+Digital PDFs are parsed from embedded text first. For scanned or image-only PDFs, install:
+
+- [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)
+- [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases/) if your OCR path needs PDF image conversion
+
+## Form 16 and 26AS Workflow
+
+1. Upload salary slips, Form 16 Part A/B, and Form 26AS PDFs.
+2. Open Reconcile for a specific user and financial year.
+3. Review employer totals, active 26AS status, monthly mismatch rows, and tax findings.
+4. If a mismatch points to one payslip, use `Open review` to manually correct and confirm that source document.
+5. Press `Recheck` to refresh the reconciliation report.
+
+Tax documents never silently rewrite ledger income. They provide evidence and warnings only.
+
+## Notes
+
+- Financial years follow the Indian FY calendar: April 1 to March 31.
+- Form 16 Part A/B supports multiple employers per FY.
+- Form 26AS is treated as one annual government-side statement per user/FY.
+- Superseded 26AS documents are kept for audit/history until deleted.
