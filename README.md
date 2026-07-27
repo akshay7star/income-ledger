@@ -20,6 +20,7 @@ The app runs on your machine with a FastAPI backend, SQLite database, and React/
 - **Tax planner**: Indian FY tax estimates, regime comparison, advance-tax planning, and editable planning inputs.
 - **AI Advisor**: Optional cloud/custom AI advisory chat using structured app data. Deterministic tax calculations remain in the backend.
 - **Excel import/export**: Export multi-sheet workbooks with records, expenses, tax summaries, tax documents, tax reconciliation, and findings. Import structured workbook data.
+- **Expense management**: Create, edit, filter, and delete expenses with GST calculations and payment-method tracking.
 - **Backup and restore**: Local ZIP backups include database and uploaded documents.
 - **App lock and settings**: Local PIN/session lock, default user/FY preferences, local AI settings, and optional cloud AI settings.
 
@@ -122,6 +123,10 @@ Digital PDFs are parsed from embedded text first. For scanned or image-only PDFs
 5. Press `Recheck` to refresh the reconciliation report.
 
 Tax documents never silently rewrite ledger income. They provide evidence and warnings only.
+
+## Changelog
+
+- **v0.2.0 (2026-07-27)**: Added editable and filterable expenses, GST and payment-method tracking, improved compact Tally invoice extraction, and safer backup migrations. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ## Notes
 

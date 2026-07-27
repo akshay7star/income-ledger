@@ -310,7 +310,7 @@ def create_workbook_export(
     income_fields = ["id", "user_id", "record_date", "period_label", "income_type", "payer", "gross_amount", "net_amount", "tds_amount", "deductions_amount", "pf_amount", "vpf_amount", "gst_amount"]
     income_sheet.append(["User", "Financial Year", *income_fields])
     expense_sheet = wb["Expenses"]
-    expense_fields = ["id", "user_id", "expense_date", "category", "amount", "gst_amount", "notes"]
+    expense_fields = ["id", "user_id", "expense_date", "category", "amount", "gst_amount", "payment_method", "notes"]
     expense_sheet.append(["User", "Financial Year", *expense_fields])
     gst_sheet = wb["GST"]
     gst_sheet.append(["User", "Financial Year", "Month", "GST Collected", "GST Input Claims", "Net GST Payable"])
@@ -423,7 +423,7 @@ def create_workbook_export(
         document_sheet.append([users.get(detected_user, detected_user), extracted_year, *[doc.get(field) for field in document_fields]])
 
     wb["Import Income"].append(["user_id", "income_type", "record_date", "payer", "gross_amount", "net_amount", "tds_amount", "deductions_amount", "pf_amount", "vpf_amount", "gst_amount"])
-    wb["Import Expenses"].append(["user_id", "expense_date", "category", "amount", "gst_amount", "notes"])
+    wb["Import Expenses"].append(["user_id", "expense_date", "category", "amount", "gst_amount", "payment_method", "notes"])
 
     label = "multi-year" if len(selected_years) > 1 else selected_years[0].replace(" ", "-").replace("/", "-")
     path = Path(tempfile.gettempdir()) / f"income-ledger-{label}.xlsx"
@@ -438,7 +438,7 @@ def create_import_template() -> Path:
     wb.active.title = "Import Income"
     wb["Import Income"].append(["user_id", "income_type", "record_date", "payer", "gross_amount", "net_amount", "tds_amount", "deductions_amount", "pf_amount", "vpf_amount", "gst_amount"])
     expense_sheet = wb.create_sheet("Import Expenses")
-    expense_sheet.append(["user_id", "expense_date", "category", "amount", "gst_amount", "notes"])
+    expense_sheet.append(["user_id", "expense_date", "category", "amount", "gst_amount", "payment_method", "notes"])
     path = Path(tempfile.gettempdir()) / "income-ledger-import-template.xlsx"
     wb.save(path)
     return path

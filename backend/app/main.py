@@ -41,6 +41,7 @@ from .repositories import (
     list_documents,
     list_financial_years,
     list_users,
+    update_expense,
 )
 from .tax import calculate_quarterly_advance_tax, calculate_tax_for_financial_year, calculate_tax_options, completed_financial_year_months, estimate_year_end, tax_slabs_catalog
 from .financial_year import parse_date_strict
@@ -104,6 +105,7 @@ class ExpenseCreate(BaseModel):
     category: str
     amount: float = Field(..., gt=0.0)
     gst_amount: float = Field(default=0.0, ge=0.0)
+    payment_method: str = ""
     notes: str = ""
 
 
@@ -935,6 +937,16 @@ def records_create(payload: IncomeRecordCreate) -> dict:
 def expense_create(payload: ExpenseCreate) -> dict:
     try:
         return add_expense(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/expenses/{expense_id}")
+def expense_update(expense_id: int, payload: ExpenseCreate) -> dict:
+    try:
+        return update_expense(expense_id, payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

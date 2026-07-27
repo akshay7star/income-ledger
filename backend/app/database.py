@@ -93,6 +93,7 @@ def init_db() -> None:
                 category TEXT NOT NULL,
                 amount REAL NOT NULL,
                 gst_amount REAL NOT NULL DEFAULT 0,
+                payment_method TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -202,4 +203,7 @@ def init_db() -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(freelance_expenses)").fetchall()}
         if "gst_amount" not in columns:
             conn.execute("ALTER TABLE freelance_expenses ADD COLUMN gst_amount REAL NOT NULL DEFAULT 0")
+            conn.commit()
+        if "payment_method" not in columns:
+            conn.execute("ALTER TABLE freelance_expenses ADD COLUMN payment_method TEXT NOT NULL DEFAULT ''")
             conn.commit()

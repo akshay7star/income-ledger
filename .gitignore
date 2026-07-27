@@ -6,6 +6,8 @@ data/
 __pycache__/
 *.pyc
 .pytest_cache/
+.tmp_pytest/
+tests/tmp/
 .mypy_cache/
 .ruff_cache/
 *.log
@@ -15,6 +17,9 @@ project_context.md
 backup_history.md
 issue_bugs.md
 memory_dump.md
+rewrite.py
+create_invoice_implementation_plan.md
+test_data/
 
 # Databases
 *.db
@@ -46,4 +51,3 @@ memory_dump.md
 Thumbs.db
 desktop.ini
 .DS_Store
-

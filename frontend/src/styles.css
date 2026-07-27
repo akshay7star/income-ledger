@@ -633,6 +633,43 @@ h1 {
   grid-column: 1 / -1;
 }
 
+.expensesPanelHeader {
+  align-items: end;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.expensesPanelHeader h2 {
+  justify-content: flex-start;
+  margin-bottom: 0;
+}
+
+.expenseFilters {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.expenseFilters label {
+  color: var(--app-muted);
+  display: grid;
+  font-size: 11px;
+  font-weight: 700;
+  gap: 5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.expenseFilters .form-select {
+  min-width: 150px;
+  padding-block: 8px;
+  text-transform: none;
+}
+
 .panel {
   padding: 24px;
 }
@@ -1607,9 +1644,22 @@ h2 span {
 
   .dashboardHeader,
   .aiAdvisorHeader,
-  .aiToolbar {
+  .aiToolbar,
+  .expensesPanelHeader {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .expenseFilters {
+    justify-content: flex-start;
+  }
+
+  .expenseFilters label {
+    flex: 1 1 150px;
+  }
+
+  .expenseFilters .form-select {
+    width: 100%;
   }
 
   .segmentedControl {

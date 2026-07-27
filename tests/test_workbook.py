@@ -43,8 +43,8 @@ def test_workbook_import_creates_manual_rows_and_reports_errors(tmp_path, monkey
     ws.append([1, "salary", "2026-04-01", "Employer", 100, 90, 10])
     ws.append([1, "salary", "", "Bad", 100, 90, 10])
     expenses = wb.create_sheet("Import Expenses")
-    expenses.append(["user_id", "expense_date", "category", "amount", "gst_amount", "notes"])
-    expenses.append([1, "2026-04-02", "Software", 1000, 180, "IDE"])
+    expenses.append(["user_id", "expense_date", "category", "amount", "gst_amount", "payment_method", "notes"])
+    expenses.append([1, "2026-04-02", "Software", 1000, 180, "Credit Card", "IDE"])
     wb.save(workbook_path)
 
     result = import_workbook(workbook_path)
@@ -52,6 +52,9 @@ def test_workbook_import_creates_manual_rows_and_reports_errors(tmp_path, monkey
     assert result["created"]["income"] == 1
     assert result["created"]["expenses"] == 1
     assert result["errors"][0]["sheet"] == "Import Income"
+    with database.get_connection() as conn:
+        expense = conn.execute("SELECT payment_method FROM freelance_expenses").fetchone()
+    assert expense["payment_method"] == "Credit Card"
 
 
 def test_workbook_export_supports_multi_year_context_and_balance_sheet(tmp_path, monkeypatch):
@@ -75,8 +78,8 @@ def test_workbook_export_supports_multi_year_context_and_balance_sheet(tmp_path,
         conn.execute(
             """
             INSERT INTO freelance_expenses
-                (user_id, financial_year, expense_date, category, amount, gst_amount, notes)
-            VALUES (1, 'FY 2025-26', '2025-04-10', 'Software', 20000, 3600, 'IDE')
+                (user_id, financial_year, expense_date, category, amount, gst_amount, payment_method, notes)
+            VALUES (1, 'FY 2025-26', '2025-04-10', 'Software', 20000, 3600, 'Net Banking', 'IDE')
             """
         )
         conn.execute(
@@ -97,6 +100,9 @@ def test_workbook_export_supports_multi_year_context_and_balance_sheet(tmp_path,
     assert wb["Income Records"]["B1"].value == "Financial Year"
     assert wb["Income Records"]["A2"].value == "User One"
     assert wb["Income Records"]["B2"].value == "FY 2025-26"
+    expense_headers = [cell.value for cell in wb["Expenses"][1]]
+    payment_column = expense_headers.index("payment_method") + 1
+    assert wb["Expenses"].cell(row=2, column=payment_column).value == "Net Banking"
     gst_rows = list(wb["GST"].iter_rows(min_row=2, values_only=True))
     assert all(any(float(value or 0) for value in row[3:6]) for row in gst_rows)
     assert not any(row[2] == "May 2025" for row in gst_rows)

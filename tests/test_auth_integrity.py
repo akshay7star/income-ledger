@@ -249,3 +249,64 @@ def test_backup_restore_replaces_database_and_uploads(tmp_path, monkeypatch):
     assert result["restored"] is True
     assert row["name"] == "Before"
     assert (upload_dir / "before.pdf").exists()
+
+
+def test_backup_restore_migrates_expense_payment_method_column(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+    import zipfile
+
+    from backend.app import backup, database
+
+    data_dir = tmp_path / "data"
+    upload_dir = data_dir / "uploads"
+    monkeypatch.setattr(database, "DATA_DIR", data_dir)
+    monkeypatch.setattr(database, "UPLOAD_DIR", upload_dir)
+    monkeypatch.setattr(database, "DB_PATH", data_dir / "income_ledger.sqlite3")
+    database.init_db()
+
+    old_db = tmp_path / "old.sqlite3"
+    with sqlite3.connect(old_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                pan TEXT,
+                aliases TEXT NOT NULL DEFAULT '',
+                profile_hints TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE freelance_expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                financial_year TEXT NOT NULL,
+                expense_date TEXT NOT NULL,
+                category TEXT NOT NULL,
+                amount REAL NOT NULL,
+                gst_amount REAL NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+    backup_path = tmp_path / "old-backup.zip"
+    manifest = {
+        "app": "Income Ledger",
+        "format_version": 1,
+        "created_at": "2026-07-02T00:00:00+00:00",
+        "database": "database/income_ledger.sqlite3",
+        "uploads_dir": "uploads",
+        "upload_count": 0,
+    }
+    with zipfile.ZipFile(backup_path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.write(old_db, "database/income_ledger.sqlite3")
+
+    result = backup.restore_backup(backup_path)
+
+    with database.get_connection() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(freelance_expenses)").fetchall()}
+    assert result["restored"] is True
+    assert "payment_method" in columns

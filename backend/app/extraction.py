@@ -497,7 +497,7 @@ def first_text(*values: object) -> str | None:
 
 def gstin_to_pan(value: object) -> str | None:
     text = str(value or "").upper()
-    match = re.search(r"\b\d{2}([A-Z]{5}[0-9]{4}[A-Z])[0-9A-Z]{3}\b", text)
+    match = re.search(r"\d{2}([A-Z]{5}[0-9]{4}[A-Z])[0-9A-Z]{3}", text)
     return match.group(1) if match else None
 
 
@@ -645,6 +645,54 @@ def extract_currency_amounts_from_line(line: str) -> list[float]:
     return [parse_amount(match) for match in matches]
 
 
+TALLY_AMOUNT_PATTERN = r"([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.\d{1,2})?|[0-9]+(?:\.\d{1,2})?)"
+
+
+def compact_document_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def find_tally_service_invoice_amount(text: str, key: str) -> float:
+    compact = compact_document_text(text)
+    lowered = compact.lower()
+    if "professional charges" not in lowered or ("tax invoice" not in lowered and "invoice no" not in lowered):
+        return 0.0
+
+    if key == "gross_amount":
+        patterns = [
+            rf"professional\s+charges(?:(?!output-|total|amount chargeable).)*?m/o\s+[A-Za-z]+,?\s*\d{{4}}\s*{TALLY_AMOUNT_PATTERN}",
+            rf"professional\s+charges(?:(?!output-|total|amount chargeable).)*?{TALLY_AMOUNT_PATTERN}(?=\s*(?:[0-9]{{6}}|output-?|cgst|sgst|igst|total))",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, compact, flags=re.IGNORECASE)
+            if match:
+                return parse_amount(match.group(1))
+
+    if key in {"invoice_amount", "net_amount"}:
+        match = re.search(
+            rf"total\D{{0,20}}{TALLY_AMOUNT_PATTERN}\s*amount\s+chargeable",
+            compact,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return parse_amount(match.group(1))
+
+    if key == "gst_amount":
+        total = 0.0
+        for label in ("c\\s*gst", "s\\s*gst", "igst"):
+            match = re.search(
+                rf"(?:output[-\s]*)?{label}\s*[-:]?\s*\d+(?:\.\d+)?%\s*{TALLY_AMOUNT_PATTERN}",
+                compact,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                total += parse_amount(match.group(1))
+        if total:
+            return round(total, 2)
+
+    return 0.0
+
+
 def amounts_near_label(lines: list[str], index: int) -> list[float]:
     amounts: list[float] = []
     for nearby in lines[index:index + 3]:
@@ -655,6 +703,10 @@ def amounts_near_label(lines: list[str], index: int) -> list[float]:
 
 
 def find_amount(text: str, key: str) -> float:
+    tally_amount = find_tally_service_invoice_amount(text, key)
+    if tally_amount:
+        return tally_amount
+
     # Handle GST sum logic
     if key == "gst_amount":
         total_gst = 0.0
@@ -748,6 +800,9 @@ def find_pan(text: str) -> str | None:
 def find_date(text: str) -> str | None:
     lines = [line.strip() for line in text.splitlines()]
     label_patterns = [
+        r"dated\s*[:\-]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
+        r"dated\s*[:\-]?\s*(\d{1,2}[-/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/]\d{2,4})",
+        r"dated\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
         r"\b(?:pay\s+date|payment\s+date|invoice\s+date|date\s+issued|issue\s+date|bill\s+date)\s*[:\-]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
         r"\b(?:pay\s+date|payment\s+date|invoice\s+date|date\s+issued|issue\s+date|bill\s+date)\s*[:\-]?\s*(\d{1,2}[-/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/]\d{2,4})",
         r"\b(?:pay\s+date|payment\s+date|invoice\s+date|date\s+issued|issue\s+date|bill\s+date)\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
@@ -837,6 +892,15 @@ def find_salary_employer(text: str) -> str | None:
 
 
 def find_invoice_seller(text: str) -> str | None:
+    compact = compact_document_text(text)
+    match = re.search(
+        r"(?:tax\s+invoice|invoice)\s*([A-Za-z][A-Za-z0-9 .&()/,-]{2,120}?)(?=(?:G/|GST\s+No\.?|GSTIN/UIN|State\s+Name|E-?Mail|Consignee|Buyer|Invoice\s+No\.|\d{2}[A-Z]{5}[0-9]{4}[A-Z]))",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).strip()[:120]
+
     lines = [line.strip() for line in text.splitlines()]
     for index, line in enumerate(lines[:-1]):
         if "tax invoice" in line.lower():
@@ -847,6 +911,16 @@ def find_invoice_seller(text: str) -> str | None:
 
 
 def find_invoice_buyer(text: str) -> str | None:
+    compact = compact_document_text(text)
+    for label in (r"buyer\s*\(bill\s+to\)", r"bill\s+to", r"\bbuyer\b"):
+        match = re.search(
+            rf"{label}\s*([A-Za-z][A-Za-z0-9 .&()/,-]{{2,120}}?)(?=(?:[A-Z][/-]\d|GST\s+No\.?|GSTIN/UIN|State\s+Name|Invoice\s+No\.|Dated))",
+            compact,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).strip()[:120]
+
     lines = [line.strip() for line in text.splitlines()]
     for index, line in enumerate(lines[:-1]):
         lowered = line.lower()

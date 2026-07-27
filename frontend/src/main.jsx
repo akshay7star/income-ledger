@@ -42,6 +42,15 @@ import './styles.css';
 
 const API = 'http://127.0.0.1:8001/api';
 const AUTH_TOKEN_KEY = 'income-ledger-auth-token';
+const THEME_STORAGE_KEY = 'income-ledger-theme';
+
+function readStoredTheme() {
+  try {
+    return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
 
 function currency(value) {
   return new Intl.NumberFormat('en-IN', {
@@ -53,6 +62,36 @@ function currency(value) {
 
 function roundMoney(value) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function gstRateFromAmounts(totalAmount, gstAmount) {
+  const total = Number(totalAmount || 0);
+  const gst = Number(gstAmount || 0);
+  const base = total - gst;
+  if (base <= 0 || gst <= 0) return '';
+  return roundMoney((gst / base) * 100);
+}
+
+function calculateExpenseTotals(baseAmount, gstRate) {
+  const base = Number(baseAmount || 0);
+  const rate = Number(gstRate || 0);
+  const gst = roundMoney((base * rate) / 100);
+  return {
+    amount: roundMoney(base + gst),
+    gst_amount: gst,
+  };
+}
+
+function calculateExpenseBaseFromTotal(totalAmount, gstRate) {
+  const total = Number(totalAmount || 0);
+  const rate = Number(gstRate || 0);
+  const divisor = 1 + (rate / 100);
+  const base = divisor > 0 ? roundMoney(total / divisor) : total;
+  return {
+    base_amount: base,
+    amount: roundMoney(total),
+    gst_amount: roundMoney(total - base),
+  };
 }
 
 function financialYearForDate(value) {
@@ -338,7 +377,7 @@ function App() {
       return [];
     }
   });
-  const [theme, setTheme] = useState(() => localStorage.getItem('income-ledger-theme') || 'light');
+  const [theme, setTheme] = useState(readStoredTheme);
   const [aiAdvisorSessions, setAiAdvisorSessions] = useState({});
   const selectedUserRef = useRef(selectedUser);
   const selectedYearRef = useRef(selectedYear);
@@ -587,7 +626,9 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem('income-ledger-theme', theme);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {}
   }, [theme]);
 
   useEffect(() => {
@@ -2128,12 +2169,33 @@ function NewUserForm({ onCreated }) {
 
 function ExpenseForm({ users, selectedUser, onCreated }) {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ user_id: selectedUser === 'all' ? '' : selectedUser, expense_date: '', category: '', amount: '', gst_amount: '', notes: '' });
+  const emptyForm = { user_id: selectedUser === 'all' ? '' : selectedUser, expense_date: '', category: '', base_amount: '', gst_rate: '', amount: '', gst_amount: '', amount_entry: 'base', payment_method: '', notes: '' };
+  const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (!open && selectedUser !== 'all') setForm((current) => ({ ...current, user_id: selectedUser }));
   }, [open, selectedUser]);
+
+  function updateExpenseBase(value) {
+    const totals = calculateExpenseTotals(value, form.gst_rate);
+    setForm({ ...form, base_amount: value, amount: totals.amount, gst_amount: totals.gst_amount, amount_entry: 'base' });
+  }
+
+  function updateExpenseAmount(value) {
+    const totals = calculateExpenseBaseFromTotal(value, form.gst_rate);
+    setForm({ ...form, amount: value, base_amount: totals.base_amount, gst_amount: totals.gst_amount, amount_entry: 'total' });
+  }
+
+  function updateExpenseGstRate(value) {
+    if (form.amount_entry === 'total') {
+      const totals = calculateExpenseBaseFromTotal(form.amount, value);
+      setForm({ ...form, gst_rate: value, base_amount: totals.base_amount, gst_amount: totals.gst_amount });
+      return;
+    }
+    const totals = calculateExpenseTotals(form.base_amount, value);
+    setForm({ ...form, gst_rate: value, amount: totals.amount, gst_amount: totals.gst_amount });
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -2142,9 +2204,13 @@ function ExpenseForm({ users, selectedUser, onCreated }) {
       await api('/expenses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, amount: Number(form.amount), gst_amount: Number(form.gst_amount || 0) }),
+        body: JSON.stringify({
+          ...form,
+          amount: Number(form.amount || form.base_amount || 0),
+          gst_amount: Number(form.gst_amount || 0),
+        }),
       });
-      setForm({ user_id: selectedUser === 'all' ? '' : selectedUser, expense_date: '', category: '', amount: '', gst_amount: '', notes: '' });
+      setForm({ ...emptyForm, user_id: selectedUser === 'all' ? '' : selectedUser });
       setOpen(false);
       await onCreated();
     } catch (err) {
@@ -2165,12 +2231,18 @@ function ExpenseForm({ users, selectedUser, onCreated }) {
       </select>
       <input className="form-control" type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} required />
       <input className="form-control" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required />
-      <input className="form-control" type="number" placeholder="Amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
-      <input className="form-control" type="number" placeholder="GST claim" value={form.gst_amount} onChange={(e) => setForm({ ...form, gst_amount: e.target.value })} />
+      <input className="form-control" type="number" step="any" placeholder="Amount before GST" value={form.base_amount} onChange={(e) => updateExpenseBase(e.target.value)} />
+      <input className="form-control" type="number" step="any" placeholder="GST %" value={form.gst_rate} onChange={(e) => updateExpenseGstRate(e.target.value)} />
+      <input className="form-control" type="number" step="any" placeholder="Amount with GST" value={form.amount} onChange={(e) => updateExpenseAmount(e.target.value)} required />
+      <input className="form-control" type="number" step="any" placeholder="GST claim" value={form.gst_amount} readOnly />
+      <select className="form-select" value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })}>
+        <option value="">Payment method</option>
+        {PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+      </select>
       <input className="form-control" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
       <div className="d-flex gap-2">
         <button className="btn btn-success" type="submit"><Check size={16} /></button>
-        <button className="btn btn-outline-secondary" type="button" title="Cancel" onClick={() => { setForm({ user_id: selectedUser === 'all' ? '' : selectedUser, expense_date: '', category: '', amount: '', gst_amount: '', notes: '' }); setOpen(false); }}><X size={16} /></button>
+        <button className="btn btn-outline-secondary" type="button" title="Cancel" onClick={() => { setForm({ ...emptyForm, user_id: selectedUser === 'all' ? '' : selectedUser }); setOpen(false); }}><X size={16} /></button>
       </div>
     </form>
   );
@@ -2708,8 +2780,46 @@ function RecordsPanel({ records, onDeleted }) {
   );
 }
 
+const EXPENSE_MONTHS = [
+  ['01', 'January'],
+  ['02', 'February'],
+  ['03', 'March'],
+  ['04', 'April'],
+  ['05', 'May'],
+  ['06', 'June'],
+  ['07', 'July'],
+  ['08', 'August'],
+  ['09', 'September'],
+  ['10', 'October'],
+  ['11', 'November'],
+  ['12', 'December'],
+];
+
 function ExpensesPanel({ expenses, users, onDeleted }) {
   const userNames = useMemo(() => Object.fromEntries(users.map((user) => [String(user.id), user.name])), [users]);
+  const [editingExpense, setEditingExpense] = useState(null);
+  const [expenseMonthFilter, setExpenseMonthFilter] = useState('');
+  const [expenseYearFilter, setExpenseYearFilter] = useState('');
+  const expenseYears = useMemo(() => (
+    [...new Set(expenses
+      .map((expense) => String(expense.expense_date || '').match(/^(\d{4})-\d{2}/)?.[1])
+      .filter(Boolean))]
+      .sort((a, b) => Number(b) - Number(a))
+  ), [expenses]);
+  const filteredExpenses = useMemo(() => expenses.filter((expense) => {
+    const dateParts = String(expense.expense_date || '').match(/^(\d{4})-(\d{2})/);
+    if (!dateParts) return !expenseMonthFilter && !expenseYearFilter;
+    const [, year, month] = dateParts;
+    return (!expenseMonthFilter || month === expenseMonthFilter)
+      && (!expenseYearFilter || year === expenseYearFilter);
+  }), [expenses, expenseMonthFilter, expenseYearFilter]);
+  const hasExpenseFilter = Boolean(expenseMonthFilter || expenseYearFilter);
+
+  useEffect(() => {
+    if (expenseYearFilter && !expenseYears.includes(expenseYearFilter)) {
+      setExpenseYearFilter('');
+    }
+  }, [expenseYearFilter, expenseYears]);
 
   async function deleteExpense(expense) {
     if (!window.confirm(`Delete expense ${currency(expense.amount)} for ${expense.expense_date}?`)) return;
@@ -2719,7 +2829,40 @@ function ExpensesPanel({ expenses, users, onDeleted }) {
 
   return (
     <section className="panel shadow-sm expensesPanel">
-      <h2>Expenses <span className="badge text-bg-secondary">{expenses.length}</span></h2>
+      <div className="expensesPanelHeader">
+        <h2>
+          Expenses
+          <span className="badge text-bg-secondary">
+            {hasExpenseFilter ? `${filteredExpenses.length} of ${expenses.length}` : expenses.length}
+          </span>
+        </h2>
+        <div className="expenseFilters" role="search" aria-label="Filter expenses by month and year">
+          <label>
+            <span>Month</span>
+            <select
+              className="form-select"
+              aria-label="Expense month"
+              value={expenseMonthFilter}
+              onChange={(event) => setExpenseMonthFilter(event.target.value)}
+            >
+              <option value="">All months</option>
+              {EXPENSE_MONTHS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Year</span>
+            <select
+              className="form-select"
+              aria-label="Expense year"
+              value={expenseYearFilter}
+              onChange={(event) => setExpenseYearFilter(event.target.value)}
+            >
+              <option value="">All years</option>
+              {expenseYears.map((year) => <option key={year} value={year}>{year}</option>)}
+            </select>
+          </label>
+        </div>
+      </div>
       <div className="tableWrap">
         <table className="table table-hover align-middle">
           <thead>
@@ -2729,34 +2872,54 @@ function ExpensesPanel({ expenses, users, onDeleted }) {
               <th>Category</th>
               <th>Amount</th>
               <th>GST claim</th>
+              <th>Payment</th>
               <th>Notes</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {expenses.map((expense) => (
+            {filteredExpenses.map((expense) => (
               <tr key={expense.id}>
                 <td>{expense.expense_date}</td>
                 <td>{userNames[String(expense.user_id)] || expense.user_id}</td>
                 <td>{expense.category}</td>
                 <td>{currency(expense.amount)}</td>
                 <td>{currency(expense.gst_amount || 0)}</td>
+                <td>{expense.payment_method || '-'}</td>
                 <td>{expense.notes}</td>
                 <td>
-                  <button className="btn btn-sm btn-outline-danger" type="button" title="Delete expense" onClick={() => deleteExpense(expense)}>
-                    <Trash2 size={15} />
-                  </button>
+                  <div className="d-flex gap-2 justify-content-end">
+                    <button className="btn btn-sm btn-outline-secondary" type="button" title="Edit expense" onClick={() => setEditingExpense(expense)}>
+                      <Edit size={15} />
+                    </button>
+                    <button className="btn btn-sm btn-outline-danger" type="button" title="Delete expense" onClick={() => deleteExpense(expense)}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
-            {expenses.length === 0 && (
+            {filteredExpenses.length === 0 && (
               <tr>
-                <td colSpan="7" className="muted">No expenses recorded for this selection.</td>
+                <td colSpan="8" className="muted">
+                  {hasExpenseFilter ? 'No expenses match the selected month and year.' : 'No expenses recorded for this selection.'}
+                </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+      {editingExpense && (
+        <ExpenseEditModal
+          expense={editingExpense}
+          users={users}
+          onClose={() => setEditingExpense(null)}
+          onSaved={async () => {
+            setEditingExpense(null);
+            await onDeleted();
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -2772,6 +2935,101 @@ const EXPENSE_CATEGORIES = [
   'Meals',
   'Others'
 ];
+
+const PAYMENT_METHODS = ['Cash', 'Credit Card', 'Net Banking', 'Promissory Note'];
+
+function ExpenseEditModal({ expense, users, onClose, onSaved }) {
+  const initialGstRate = gstRateFromAmounts(expense.amount, expense.gst_amount);
+  const initialBaseAmount = roundMoney(Number(expense.amount || 0) - Number(expense.gst_amount || 0));
+  const [form, setForm] = useState({
+    user_id: expense.user_id || '',
+    expense_date: expense.expense_date || '',
+    category: expense.category || '',
+    base_amount: initialBaseAmount || '',
+    gst_rate: initialGstRate,
+    amount: expense.amount ?? '',
+    gst_amount: expense.gst_amount ?? '',
+    amount_entry: 'base',
+    payment_method: expense.payment_method || '',
+    notes: expense.notes || '',
+  });
+  const [error, setError] = useState('');
+  const categoryListId = `expense-category-options-${expense.id}`;
+
+  function updateExpenseBase(value) {
+    const totals = calculateExpenseTotals(value, form.gst_rate);
+    setForm({ ...form, base_amount: value, amount: totals.amount, gst_amount: totals.gst_amount, amount_entry: 'base' });
+  }
+
+  function updateExpenseAmount(value) {
+    const totals = calculateExpenseBaseFromTotal(value, form.gst_rate);
+    setForm({ ...form, amount: value, base_amount: totals.base_amount, gst_amount: totals.gst_amount, amount_entry: 'total' });
+  }
+
+  function updateExpenseGstRate(value) {
+    if (form.amount_entry === 'total') {
+      const totals = calculateExpenseBaseFromTotal(form.amount, value);
+      setForm({ ...form, gst_rate: value, base_amount: totals.base_amount, gst_amount: totals.gst_amount });
+      return;
+    }
+    const totals = calculateExpenseTotals(form.base_amount, value);
+    setForm({ ...form, gst_rate: value, amount: totals.amount, gst_amount: totals.gst_amount });
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    try {
+      await api(`/expenses/${expense.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...form,
+          user_id: Number(form.user_id),
+          amount: Number(form.amount || form.base_amount || 0),
+          gst_amount: Number(form.gst_amount || 0),
+        }),
+      });
+      await onSaved();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <div className="ledger-modal-backdrop">
+      <form className="ledger-modal shadow-lg" onSubmit={submit}>
+        <h2>Edit Expense</h2>
+        <p>{expense.expense_date} - {currency(expense.amount)}</p>
+        {error && <div className="alert alert-danger">{error}</div>}
+        <div className="reviewGrid">
+          <label>User<select className="form-select" value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })} required>
+            <option value="">Select user</option>
+            {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+          </select></label>
+          <label>Date<input className="form-control" type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} required /></label>
+          <label>Category<input className="form-control" list={categoryListId} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required /></label>
+          <datalist id={categoryListId}>
+            {EXPENSE_CATEGORIES.map((category) => <option key={category} value={category} />)}
+          </datalist>
+          <label>Amount before GST<input className="form-control" type="number" step="any" value={form.base_amount} onChange={(e) => updateExpenseBase(e.target.value)} /></label>
+          <label>GST %<input className="form-control" type="number" step="any" value={form.gst_rate} onChange={(e) => updateExpenseGstRate(e.target.value)} /></label>
+          <label>Amount with GST<input className="form-control" type="number" step="any" value={form.amount} onChange={(e) => updateExpenseAmount(e.target.value)} required /></label>
+          <label>GST claim<input className="form-control" type="number" step="any" value={form.gst_amount} readOnly /></label>
+          <label>Payment method<select className="form-select" value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })}>
+            <option value="">Select payment method</option>
+            {PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+          </select></label>
+          <label className="notesField" style={{ gridColumn: 'span 2' }}>Notes<input className="form-control" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label>
+        </div>
+        <div className="modalActions">
+          <button className="btn btn-outline-secondary" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" type="submit"><Check size={16} /> Save expense</button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function ReviewModal({ document, users, onClose, onSaved }) {
   const extracted = document.extracted || {};

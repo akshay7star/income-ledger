@@ -560,8 +560,8 @@ def add_expense(payload: dict) -> dict:
     with get_connection() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO freelance_expenses (user_id, financial_year, expense_date, category, amount, gst_amount, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO freelance_expenses (user_id, financial_year, expense_date, category, amount, gst_amount, payment_method, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(payload["user_id"]),
@@ -570,6 +570,7 @@ def add_expense(payload: dict) -> dict:
                 payload["category"].strip(),
                 float(payload["amount"]),
                 float(payload.get("gst_amount") or 0),
+                payload.get("payment_method", "").strip(),
                 payload.get("notes", ""),
             ),
         )
@@ -587,8 +588,8 @@ def add_document_expense(document_id: int, payload: dict) -> dict:
         financial_year = financial_year_for(expense_date)
         cursor = conn.execute(
             """
-            INSERT INTO freelance_expenses (user_id, financial_year, expense_date, category, amount, gst_amount, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO freelance_expenses (user_id, financial_year, expense_date, category, amount, gst_amount, payment_method, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(payload["user_id"]),
@@ -597,6 +598,7 @@ def add_document_expense(document_id: int, payload: dict) -> dict:
                 payload["category"].strip(),
                 float(payload["amount"]),
                 float(payload.get("gst_amount") or 0),
+                payload.get("payment_method", "").strip(),
                 payload.get("notes", ""),
             ),
         )
@@ -607,6 +609,7 @@ def add_document_expense(document_id: int, payload: dict) -> dict:
             "expense_id": row_dict["id"],
             "document_id": document_id,
             "document_flow": "purchase_expense",
+            "payment_method": payload.get("payment_method", "").strip(),
         }
         conn.execute("DELETE FROM income_records WHERE document_id = ?", (document_id,))
         conn.execute(
@@ -619,6 +622,78 @@ def add_document_expense(document_id: int, payload: dict) -> dict:
             VALUES (?, ?, 'confirm_purchase_expense', ?, ?)
             """,
             (document_id, int(payload["user_id"]), document["extracted_json"], json.dumps(after_json)),
+        )
+        conn.commit()
+    return row_dict
+
+
+def update_expense(expense_id: int, payload: dict) -> dict:
+    expense_date = parse_date_strict(payload.get("expense_date"))
+    financial_year = financial_year_for(expense_date)
+    user_id = int(payload["user_id"])
+    with get_connection() as conn:
+        existing = conn.execute("SELECT * FROM freelance_expenses WHERE id = ?", (int(expense_id),)).fetchone()
+        if not existing:
+            raise KeyError("Expense not found")
+        before_json = json.dumps(row_to_dict(existing))
+
+        conn.execute(
+            """
+            UPDATE freelance_expenses
+            SET user_id = ?, financial_year = ?, expense_date = ?, category = ?, amount = ?, gst_amount = ?, payment_method = ?, notes = ?
+            WHERE id = ?
+            """,
+            (
+                user_id,
+                financial_year,
+                expense_date.isoformat(),
+                payload["category"].strip(),
+                float(payload["amount"]),
+                float(payload.get("gst_amount") or 0),
+                payload.get("payment_method", "").strip(),
+                payload.get("notes", ""),
+                int(expense_id),
+            ),
+        )
+        row = conn.execute("SELECT * FROM freelance_expenses WHERE id = ?", (int(expense_id),)).fetchone()
+        row_dict = row_to_dict(row)
+
+        linked_document_id = None
+        docs = conn.execute("SELECT id, extracted_json FROM documents WHERE document_type = 'purchase_expense'").fetchall()
+        for doc in docs:
+            try:
+                extracted = json.loads(doc["extracted_json"] or "{}")
+            except Exception:
+                continue
+            if extracted.get("expense_id") != int(expense_id):
+                continue
+            linked_document_id = doc["id"]
+            updated_extracted = {
+                **extracted,
+                "user_id": user_id,
+                "expense_date": expense_date.isoformat(),
+                "category": payload["category"].strip(),
+                "amount": float(payload["amount"]),
+                "gst_amount": float(payload.get("gst_amount") or 0),
+                "payment_method": payload.get("payment_method", "").strip(),
+                "notes": payload.get("notes", ""),
+                "expense_id": int(expense_id),
+                "document_id": doc["id"],
+                "document_type": "purchase_expense",
+                "document_flow": "purchase_expense",
+            }
+            conn.execute(
+                "UPDATE documents SET detected_user_id = ?, extracted_json = ? WHERE id = ?",
+                (user_id, json.dumps(updated_extracted), doc["id"]),
+            )
+            break
+
+        conn.execute(
+            """
+            INSERT INTO audit_events (document_id, user_id, event_type, before_json, after_json)
+            VALUES (?, ?, 'update_expense', ?, ?)
+            """,
+            (linked_document_id, user_id, before_json, json.dumps(row_dict)),
         )
         conn.commit()
     return row_dict

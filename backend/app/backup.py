@@ -139,6 +139,7 @@ def restore_backup(zip_path: Path) -> dict:
                     target = database.UPLOAD_DIR / path.relative_to(restored_uploads)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, target)
+        database.init_db()
 
     return {
         "restored": True,

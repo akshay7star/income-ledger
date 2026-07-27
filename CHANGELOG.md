@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.2.0] - 2026-07-27
+
+### Added
+- Added editable expenses with automatic GST calculations, payment methods, and month/year filtering.
+- Included expense payment methods in workbook imports/exports and AI tax-planning context.
+- Added support for extracting payer, invoice totals, GST, TDS, and dates from compact Tally service invoices.
+- Added regression coverage for expense updates, payment methods, backup migrations, workbook data, and compact invoice extraction.
+
+### Fixed
+- Run database migrations after restoring older backups so newly required expense fields are available.
+- Persist and apply the selected theme before the React app renders.
+
 ## [v0.1.2] - 2026-06-09
 
 ### Added

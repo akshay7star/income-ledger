@@ -526,6 +526,25 @@ def test_run_local_parser_reads_gst_from_tally_style_freelance_invoice():
     assert validate_local_extraction(data) is True
 
 
+def test_run_local_parser_reads_compact_tally_service_invoice_text():
+    from backend.app.extraction import run_local_parser, validate_local_extraction
+    text = """
+Tax InvoiceDEVLINA BHATNAGAR(FY-2026-27)G/CA-508, City Apartments,Aditya World City, NH-24, Ghaziabad,Uttar PradeshE-Mail:-Devlinapaul2015@gmail.ComGST No. 09CPIPP9940K1Z1State Name :  Uttar Pradesh, Code : 09E-Mail : devlinapaul2015@gmail.comConsignee (Ship to)Gen Aquarius Private LimitedA-8,Sector-23, Noida, Gautam Budh Nagar,GST No. 09AALCG7851K1ZXGSTIN/UIN : 09AALCG7851K1ZXState Name : Uttar Pradesh, Code : 09Buyer (Bill to)Gen Aquarius Private LimitedA-8,Sector-23, Noida, Gautam Budh Nagar,GST No. 09AALCG7851K1ZXGSTIN/UIN : 09AALCG7851K1ZXState Name : Uttar Pradesh, Code : 09Invoice No.003/2026-27Delivery NoteReference No. & Date.Buyer's Order No.Dispatch Doc No.Dispatched throughDated29-Jun-26Mode/Terms of PaymentOther ReferencesDatedDelivery Note DateDestinationTerms of DeliverySlParticulars AmountperRateQuantityHSN/SACNo.1Professional Charges for the M/o June,20262,83,333.00998314Output- CGST-9%25,499.97%9Output-SGST-9%25,499.97%9Total\u20b9 3,34,332.94Amount Chargeable (in words)E. & O.EINR Three Lakh Thirty Four Thousand Three Hundred Thirty Two and Ninety Four paise OnlyHSN/SAC TotalSGST/UTGSTCGSTTaxableTax AmountAmountRateAmountRateValue998314 50,999.9425,499.979%25,499.979%2,83,333.00Total 50,999.9425,499.9725,499.972,83,333.00Tax Amount (in words)  :INR Fifty Thousand Nine Hundred Ninety Nine and Ninety Four paise Onlyfor DEVLINA BHATNAGAR(FY-2026-27)Authorised SignatoryThis is a Computer Generated Invoice
+"""
+    data = run_local_parser(text)
+    assert data["document_type"] == "freelance_invoice"
+    assert data["name"] == "DEVLINA BHATNAGAR(FY-2026-27)"
+    assert data["pan"] == "CPIPP9940K"
+    assert data["payer"] == "Gen Aquarius Private Limited"
+    assert data["record_date"] == "2026-06-29"
+    assert data["gross_amount"] == 283333
+    assert data["gst_amount"] == 50999.94
+    assert data["parsed_net_amount"] == 334332.94
+    assert data["tds_amount"] == 28333.3
+    assert data["net_amount"] == 254999.7
+    assert validate_local_extraction(data) is True
+
+
 def test_local_parser_fallback_pipeline(monkeypatch, tmp_path):
     from backend.app import extraction
     

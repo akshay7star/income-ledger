@@ -242,6 +242,20 @@ def _expense_category_totals(expenses: list[dict]) -> dict:
     }
 
 
+def _expense_payment_method_totals(expenses: list[dict]) -> dict:
+    totals: dict[str, dict[str, float]] = {}
+    for row in expenses:
+        method = str(row.get("payment_method") or "Unspecified")
+        entry = totals.setdefault(method, {"amount": 0.0, "gst_amount": 0.0, "count": 0})
+        entry["amount"] += _amount(row.get("amount"))
+        entry["gst_amount"] += _amount(row.get("gst_amount"))
+        entry["count"] += 1
+    return {
+        method: {"amount": round(values["amount"], 2), "gst_amount": round(values["gst_amount"], 2), "count": values["count"]}
+        for method, values in sorted(totals.items())
+    }
+
+
 def _category_total(category_totals: dict, *needles: str) -> float:
     total = 0.0
     lowered_needles = [needle.lower() for needle in needles]
@@ -300,6 +314,7 @@ def _itr_analysis_context(user_id: str, financial_year: str) -> str:
     assessment_year = tax.get("assessment_year") or _assessment_year_for(financial_year)
     profile = _fetch_taxpayer_profile(user_id)
     expense_totals = _expense_category_totals(data["expenses"])
+    payment_method_totals = _expense_payment_method_totals(data["expenses"])
     tax_options = calculate_tax_options(
         financial_year,
         summary.get("salary_income") or 0,
@@ -383,6 +398,8 @@ def _itr_analysis_context(user_id: str, financial_year: str) -> str:
         }
         if expense_totals:
             expense_details["category_totals"] = expense_totals
+        if payment_method_totals:
+            expense_details["payment_method_totals"] = payment_method_totals
         freelance_section = {
             "gross_receipts_turnover": freelance_income,
             "freelance_profit_used_by_backend": freelance_profit,
