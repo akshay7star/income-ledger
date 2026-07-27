@@ -231,8 +231,6 @@ backend/app/                 FastAPI routes and domain services
 frontend/src/                React views and application styles
 tests/                       Backend and integration tests
 data/                        Local runtime data (Git-ignored)
-create_invoice_tasks.md      Invoice implementation checklist
-invoice_pdf_layout_spec.md   Invoice PDF layout specification
 Start-IncomeLedger.ps1       Windows launcher
 CHANGELOG.md                 Release history
 ```
