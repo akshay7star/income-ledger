@@ -290,6 +290,22 @@ h1 {
   margin-top: 4px;
 }
 
+.appVersion {
+  align-items: center;
+  background: var(--app-primary-soft);
+  border: 1px solid color-mix(in srgb, var(--app-primary) 32%, transparent);
+  border-radius: 999px;
+  color: var(--app-primary);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin-left: 9px;
+  padding: 3px 7px;
+  vertical-align: middle;
+  -webkit-text-fill-color: var(--app-primary);
+}
+
 /* General Buttons Visual Upgrade */
 .btn {
   font-weight: 600;
@@ -1720,4 +1736,498 @@ h2 span {
   --bs-btn-border-color: var(--app-border);
   --bs-btn-hover-color: #fff;
   --bs-btn-hover-bg: var(--app-border);
+}
+
+/* Invoice workspace */
+.invoicesView {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 32px;
+}
+
+.invoicesHeader,
+.invoiceModalHeader,
+.invoiceSectionTitle,
+.invoicePreviewFooter {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.invoicesHeader h2,
+.invoiceModalHeader h2 {
+  margin: 0;
+}
+
+.invoicesHeader p,
+.invoiceModalHeader p {
+  color: var(--app-muted);
+  margin: 4px 0 0;
+}
+
+.invoiceHeaderActions,
+.invoiceInlineActions,
+.invoiceFormActions,
+.invoicePreviewActions,
+.invoiceRowActions,
+.invoiceLineActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.invoiceFilters {
+  align-items: end;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: 18px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(180px, 240px) minmax(220px, 320px) minmax(160px, 1fr);
+  padding: 16px;
+}
+
+.invoiceFilters label,
+.invoiceFieldGrid label,
+.invoiceNotesGrid label,
+.invoiceCancelModal label {
+  display: grid;
+  gap: 6px;
+}
+
+.invoiceFilters label > span,
+.invoiceFieldGrid label > span,
+.invoiceNotesGrid label > span,
+.invoiceCancelModal label > span,
+.invoiceFilterYear > span {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.invoiceFilterYear {
+  display: grid;
+  gap: 6px;
+  justify-self: end;
+  text-align: right;
+}
+
+.invoiceListPanel {
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.invoiceListTable {
+  margin: 0;
+}
+
+.invoiceListTable th {
+  white-space: nowrap;
+}
+
+.invoiceListTable td > small {
+  color: var(--app-muted);
+  display: block;
+  margin-top: 3px;
+}
+
+.invoiceListTable td:last-child {
+  min-width: 140px;
+}
+
+.invoiceEmptyState {
+  color: var(--app-muted);
+  display: grid;
+  gap: 8px;
+  min-height: 260px;
+  padding: 30px;
+  place-items: center;
+  text-align: center;
+}
+
+.invoiceEmptyState h3,
+.invoiceEmptyState p {
+  margin: 0;
+}
+
+.invoiceStatus {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 5px 10px;
+  text-transform: uppercase;
+}
+
+.invoiceStatus-draft {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.invoiceStatus-issued {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.invoiceStatus-cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+:root[data-theme="dark"] .invoiceStatus-draft {
+  background: rgb(146 64 14 / 35%);
+  color: #fde68a;
+}
+
+:root[data-theme="dark"] .invoiceStatus-issued {
+  background: rgb(22 101 52 / 35%);
+  color: #bbf7d0;
+}
+
+:root[data-theme="dark"] .invoiceStatus-cancelled {
+  background: rgb(153 27 27 / 35%);
+  color: #fecaca;
+}
+
+.invoiceModalBackdrop {
+  padding: 20px;
+  z-index: 1100;
+}
+
+.invoiceEditorModal,
+.invoicePartyModal,
+.invoicePreviewModal {
+  display: flex;
+  flex-direction: column;
+  max-height: 94vh;
+  max-width: none;
+  overflow: hidden;
+  width: min(1400px, 96vw);
+}
+
+.invoicePartyModal {
+  width: min(1180px, 96vw);
+}
+
+.invoicePreviewModal {
+  width: min(1050px, 96vw);
+}
+
+.invoiceCancelModal {
+  width: min(560px, 94vw);
+}
+
+.invoiceEditorScroll {
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 18px;
+}
+
+.invoiceEditorSection {
+  border-bottom: 1px solid var(--app-border);
+  display: grid;
+  gap: 14px;
+  padding: 18px 0;
+}
+
+.invoiceEditorSection:last-child {
+  border-bottom: 0;
+}
+
+.invoiceEditorSection h3,
+.invoicePartyForm h3,
+.invoicePartyList h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.invoiceFieldGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.invoiceFieldGridFour {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.invoiceCheckbox {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 650;
+  gap: 8px;
+}
+
+.invoiceCheckbox input {
+  height: 17px;
+  width: 17px;
+}
+
+.invoiceShipToggle {
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  justify-self: start;
+  padding: 10px 12px;
+}
+
+.invoiceShipFields,
+.invoiceAdvancedFields,
+.invoiceTotalsCard,
+.invoicePartyCard {
+  background: var(--app-surface-2);
+}
+
+.invoiceShipFields,
+.invoiceAdvancedFields {
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.invoiceLineTableWrap {
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  overflow-x: auto;
+}
+
+.invoiceLineTable {
+  margin: 0;
+  min-width: 1120px;
+}
+
+.invoiceLineTable th {
+  white-space: nowrap;
+}
+
+.invoiceLineTable textarea {
+  min-width: 260px;
+  resize: vertical;
+}
+
+.invoiceLineTable input {
+  min-width: 88px;
+}
+
+.invoiceLineTable td:first-child {
+  text-align: center;
+  width: 40px;
+}
+
+.invoiceMoneyCell {
+  font-weight: 700;
+  min-width: 130px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.invoiceTaxBreakdownCell {
+  min-width: 205px;
+}
+
+.invoiceTaxBreakdownCell span {
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+  white-space: nowrap;
+}
+
+.invoiceTaxBreakdownCell span + span {
+  margin-top: 6px;
+}
+
+.invoiceLineActions {
+  flex-wrap: nowrap;
+  min-width: 126px;
+}
+
+.invoiceTotalsSection {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+}
+
+.invoiceAdvancedFields {
+  margin-top: 14px;
+}
+
+.invoiceNotesGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  margin-top: 14px;
+}
+
+.invoiceTotalsCard {
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 16px;
+}
+
+.invoiceTotalsCard > div {
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.invoiceTotalsCard dt {
+  color: var(--app-muted);
+  font-weight: 600;
+}
+
+.invoiceTotalsCard dd {
+  font-weight: 750;
+  margin: 0;
+  text-align: right;
+  text-transform: capitalize;
+}
+
+.invoiceGrandTotal {
+  border-top: 1px solid var(--app-border);
+  font-size: 1.05rem;
+  margin-top: 6px;
+  padding-top: 10px;
+}
+
+.invoiceEditorActions {
+  border-top: 1px solid var(--app-border);
+  padding-top: 16px;
+}
+
+.invoicePartyLayout {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+  min-height: 0;
+  overflow: auto;
+}
+
+.invoicePartyForm,
+.invoicePartyList {
+  align-content: start;
+  display: grid;
+  gap: 14px;
+}
+
+.invoicePartyList {
+  max-height: 72vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.invoicePartyCard {
+  border: 1px solid var(--app-border);
+  border-radius: 13px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 13px;
+}
+
+.invoicePartyCard > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.invoicePartyCard small {
+  color: var(--app-muted);
+}
+
+.invoicePreviewFrameWrap {
+  background: #5a5a5a;
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.invoicePreviewFrame {
+  background: white;
+  border: 0;
+  display: block;
+  height: min(72vh, 790px);
+  width: 100%;
+}
+
+.invoicePreviewFooter {
+  align-items: center;
+  padding-top: 14px;
+}
+
+.invoiceIssueOptions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.invoiceIssueOptions .form-select {
+  width: min(260px, 100%);
+}
+
+@media (max-width: 980px) {
+  .invoicesHeader,
+  .invoiceModalHeader,
+  .invoicePreviewFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .invoiceHeaderActions,
+  .invoicePreviewActions {
+    justify-content: flex-start;
+  }
+
+  .invoiceFieldGridFour {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .invoiceTotalsSection,
+  .invoicePartyLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .invoicePartyList {
+    max-height: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .invoiceModalBackdrop {
+    padding: 8px;
+  }
+
+  .invoiceEditorModal,
+  .invoicePartyModal,
+  .invoicePreviewModal {
+    max-height: 98vh;
+    padding: 16px;
+    width: 100%;
+  }
+
+  .invoiceFilters,
+  .invoiceFieldGrid,
+  .invoiceFieldGridFour,
+  .invoiceNotesGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .invoiceFilterYear {
+    justify-self: start;
+    text-align: left;
+  }
+
+  .invoicePreviewFrame {
+    height: 62vh;
+  }
 }

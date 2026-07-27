@@ -59,9 +59,30 @@ from .tax_reconciliation import tax_statement_report
 from .tax_planning import cloud_ai_analysis, cloud_ai_chat, tax_planning_report, update_planning_inputs
 from .tax_rule_updates import apply_tax_rule_update, draft_tax_rule_update
 from .workbook import create_import_template, create_workbook_export, import_workbook
+from .invoices import (
+    InvoiceConflictError,
+    cancel_invoice,
+    create_invoice_client,
+    create_invoice_draft,
+    create_invoice_profile,
+    delete_invoice_client,
+    delete_invoice_draft,
+    delete_invoice_profile,
+    get_invoice,
+    invoice_pdf_file,
+    issue_invoice,
+    list_generated_invoices,
+    list_invoice_clients,
+    list_invoice_profiles,
+    preview_invoice,
+    update_invoice_client,
+    update_invoice_draft,
+    update_invoice_profile,
+)
 
+APP_VERSION = "0.3.0"
 
-app = FastAPI(title="Income Ledger API")
+app = FastAPI(title="Income Ledger API", version=APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
@@ -121,6 +142,98 @@ class IncomeRecordCreate(BaseModel):
     pf_amount: float = Field(default=0.0, ge=0.0)
     vpf_amount: float = Field(default=0.0, ge=0.0)
     gst_amount: float = Field(default=0.0, ge=0.0)
+
+
+class InvoiceProfilePayload(BaseModel):
+    display_name: str = Field(min_length=1)
+    legal_name: str = ""
+    address_line1: str = ""
+    address_line2: str = ""
+    city: str = ""
+    state_name: str = ""
+    state_code: str = ""
+    postal_code: str = ""
+    email: str = ""
+    phone: str = ""
+    gstin: str = ""
+    pan: str = ""
+    bank_name: str = ""
+    bank_account_name: str = ""
+    bank_account_number: str = ""
+    bank_ifsc: str = ""
+    signature_label: str = "Authorised Signatory"
+    is_default: bool = False
+
+
+class InvoiceClientPayload(BaseModel):
+    client_name: str = Field(min_length=1)
+    legal_name: str = ""
+    address_line1: str = ""
+    address_line2: str = ""
+    city: str = ""
+    state_name: str = ""
+    state_code: str = ""
+    postal_code: str = ""
+    email: str = ""
+    phone: str = ""
+    gstin: str = ""
+    pan: str = ""
+
+
+class InvoiceItemPayload(BaseModel):
+    description: str = Field(min_length=1)
+    hsn_sac: str = ""
+    quantity: float = Field(default=1, gt=0)
+    unit: str = "Nos"
+    amount: float | None = Field(default=None, ge=0)
+    rate: float = Field(default=0, ge=0)
+    gst_rate: float | None = Field(default=None, ge=0)
+
+
+class InvoiceDraftPayload(BaseModel):
+    invoice_number: str = Field(min_length=1)
+    invoice_date: str
+    billable_period: str = ""
+    seller_profile_id: int
+    client_id: int
+    ledger_user_id: int | None = None
+    place_of_supply: str = ""
+    gst_treatment: str = "auto"
+    payment_terms: str = ""
+    due_date: str | None = None
+    delivery_note: str = ""
+    reference_number: str = ""
+    reference_date: str | None = None
+    other_references: str = ""
+    buyer_order_number: str = ""
+    buyer_order_date: str | None = None
+    dispatch_document_number: str = ""
+    delivery_note_date: str | None = None
+    dispatched_through: str = ""
+    destination: str = ""
+    terms_of_delivery: str = ""
+    ship_to_same_as_bill_to: bool = True
+    ship_to_name: str = ""
+    ship_to_address_line1: str = ""
+    ship_to_address_line2: str = ""
+    ship_to_city: str = ""
+    ship_to_state_name: str = ""
+    ship_to_state_code: str = ""
+    ship_to_postal_code: str = ""
+    ship_to_gstin: str = ""
+    tds_rate: float | None = Field(default=None, ge=0, le=100)
+    tds_amount: float | None = Field(default=None, ge=0)
+    notes: str = ""
+    items: list[InvoiceItemPayload] = Field(min_length=1)
+
+
+class InvoiceIssuePayload(BaseModel):
+    create_income_record: bool = False
+    ledger_user_id: int | None = None
+
+
+class InvoiceCancelPayload(BaseModel):
+    reason: str = Field(min_length=1)
 
 
 class AuthPin(BaseModel):
@@ -542,7 +655,7 @@ def startup() -> None:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}
 
 
 @app.get("/api/users")
@@ -957,6 +1070,179 @@ def expense_delete(expense_id: int) -> dict:
         return delete_expense(expense_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/invoice-profiles")
+def invoice_profiles_list() -> list[dict]:
+    return list_invoice_profiles()
+
+
+@app.post("/api/invoice-profiles")
+def invoice_profiles_create(payload: InvoiceProfilePayload) -> dict:
+    try:
+        return create_invoice_profile(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/invoice-profiles/{profile_id}")
+def invoice_profiles_update(profile_id: int, payload: InvoiceProfilePayload) -> dict:
+    try:
+        return update_invoice_profile(profile_id, payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/invoice-profiles/{profile_id}")
+def invoice_profiles_delete(profile_id: int) -> dict:
+    try:
+        return delete_invoice_profile(profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/invoice-clients")
+def invoice_clients_list() -> list[dict]:
+    return list_invoice_clients()
+
+
+@app.post("/api/invoice-clients")
+def invoice_clients_create(payload: InvoiceClientPayload) -> dict:
+    try:
+        return create_invoice_client(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/invoice-clients/{client_id}")
+def invoice_clients_update(client_id: int, payload: InvoiceClientPayload) -> dict:
+    try:
+        return update_invoice_client(client_id, payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/invoice-clients/{client_id}")
+def invoice_clients_delete(client_id: int) -> dict:
+    try:
+        return delete_invoice_client(client_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/invoices")
+def invoices_list(
+    financial_year: str | None = None,
+    status: str | None = None,
+    client_id: int | None = None,
+    ledger_user_id: int | None = None,
+) -> list[dict]:
+    try:
+        return list_generated_invoices(financial_year, status, client_id, ledger_user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/invoices/{invoice_id}")
+def invoices_detail(invoice_id: int) -> dict:
+    try:
+        return get_invoice(invoice_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/invoices")
+def invoices_create(payload: InvoiceDraftPayload) -> dict:
+    try:
+        return create_invoice_draft(payload.model_dump())
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/invoices/{invoice_id}")
+def invoices_update(invoice_id: int, payload: InvoiceDraftPayload) -> dict:
+    try:
+        return update_invoice_draft(invoice_id, payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/invoices/{invoice_id}")
+def invoices_delete(invoice_id: int) -> dict:
+    try:
+        return delete_invoice_draft(invoice_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/invoices/{invoice_id}/preview")
+def invoices_preview(invoice_id: int) -> FileResponse:
+    try:
+        path = preview_invoice(invoice_id)
+        return FileResponse(path, media_type="application/pdf", filename=path.name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/invoices/{invoice_id}/pdf")
+def invoices_pdf(invoice_id: int) -> FileResponse:
+    try:
+        path = invoice_pdf_file(invoice_id)
+        return FileResponse(path, media_type="application/pdf", filename=path.name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/invoices/{invoice_id}/issue")
+def invoices_issue(invoice_id: int, payload: InvoiceIssuePayload) -> dict:
+    try:
+        return issue_invoice(
+            invoice_id,
+            create_income_record=payload.create_income_record,
+            ledger_user_id=payload.ledger_user_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/invoices/{invoice_id}/cancel")
+def invoices_cancel(invoice_id: int, payload: InvoiceCancelPayload) -> dict:
+    try:
+        return cancel_invoice(invoice_id, payload.reason)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvoiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/financial-years")

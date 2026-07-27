@@ -44,6 +44,8 @@ def create_backup() -> dict:
     backup_path = target_dir / f"income-ledger-backup-{stamp}.zip"
     created_at = datetime.now(timezone.utc).isoformat()
     uploads = [path for path in database.UPLOAD_DIR.rglob("*") if path.is_file()]
+    generated_dir = database.DATA_DIR / database.GENERATED_INVOICE_DIR.name
+    generated_invoices = [path for path in generated_dir.rglob("*") if path.is_file()]
     manifest = {
         "app": "Income Ledger",
         "format_version": BACKUP_FORMAT_VERSION,
@@ -51,6 +53,8 @@ def create_backup() -> dict:
         "database": "database/income_ledger.sqlite3",
         "uploads_dir": "uploads",
         "upload_count": len(uploads),
+        "generated_invoices_dir": "generated_invoices",
+        "generated_invoice_count": len(generated_invoices),
     }
 
     with tempfile.TemporaryDirectory(dir=target_dir) as tmp:
@@ -61,6 +65,11 @@ def create_backup() -> dict:
             archive.write(snapshot_path, "database/income_ledger.sqlite3")
             for upload in uploads:
                 archive.write(upload, Path("uploads") / upload.relative_to(database.UPLOAD_DIR))
+            for invoice_pdf in generated_invoices:
+                archive.write(
+                    invoice_pdf,
+                    Path("generated_invoices") / invoice_pdf.relative_to(generated_dir),
+                )
 
     return {
         "path": backup_path,
@@ -68,13 +77,14 @@ def create_backup() -> dict:
         "created_at": created_at,
         "size_bytes": backup_path.stat().st_size,
         "upload_count": len(uploads),
+        "generated_invoice_count": len(generated_invoices),
         "format_version": BACKUP_FORMAT_VERSION,
     }
 
 
 def _safe_member_path(root: Path, member: str) -> Path:
     target = (root / member).resolve()
-    if not str(target).startswith(str(root.resolve())):
+    if not target.is_relative_to(root.resolve()):
         raise ValueError("Backup ZIP contains an unsafe path.")
     return target
 
@@ -96,7 +106,11 @@ def validate_backup(zip_path: Path) -> dict:
             for name in names:
                 if name.endswith("/"):
                     continue
-                if name not in {"manifest.json", "database/income_ledger.sqlite3"} and not name.startswith("uploads/"):
+                if (
+                    name not in {"manifest.json", "database/income_ledger.sqlite3"}
+                    and not name.startswith("uploads/")
+                    and not name.startswith("generated_invoices/")
+                ):
                     raise ValueError(f"Unexpected backup entry: {name}")
             return manifest
     except zipfile.BadZipFile as exc:
@@ -121,6 +135,8 @@ def restore_backup(zip_path: Path) -> dict:
 
         restored_db = extract_root / "database" / "income_ledger.sqlite3"
         restored_uploads = extract_root / "uploads"
+        restored_generated_invoices = extract_root / "generated_invoices"
+        generated_dir = database.DATA_DIR / database.GENERATED_INVOICE_DIR.name
         if not restored_db.exists():
             raise ValueError("Extracted backup database is missing.")
 
@@ -137,6 +153,15 @@ def restore_backup(zip_path: Path) -> dict:
             for path in restored_uploads.rglob("*"):
                 if path.is_file():
                     target = database.UPLOAD_DIR / path.relative_to(restored_uploads)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, target)
+        if generated_dir.exists():
+            shutil.rmtree(generated_dir)
+        generated_dir.mkdir(parents=True, exist_ok=True)
+        if restored_generated_invoices.exists():
+            for path in restored_generated_invoices.rglob("*"):
+                if path.is_file():
+                    target = generated_dir / path.relative_to(restored_generated_invoices)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, target)
         database.init_db()
@@ -168,6 +193,7 @@ def list_backup_history(limit: int = 20) -> list[dict]:
                 "created_at": manifest.get("created_at") or datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
                 "size_bytes": stat.st_size,
                 "upload_count": int(manifest.get("upload_count") or 0),
+                "generated_invoice_count": int(manifest.get("generated_invoice_count") or 0),
                 "format_version": int(manifest.get("format_version") or 0),
             }
         )

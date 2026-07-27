@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+## [v0.3.0] - 2026-07-27
+
+### Added
+- Added reusable seller profiles and invoice clients.
+- Added draft, preview, issue, cancellation, and PDF download flows for GST service invoices.
+- Added same-state CGST/SGST, inter-state IGST, no-GST, TDS, amount-in-words, shipping, payment, and Tally-style reference fields.
+- Added preview-first printing/downloading with a print-accurate draft watermark.
+- Added optional linked freelance income records for issued invoices.
+- Added generated-invoice audit events, workbook export data, API coverage, and PDF regression tests.
+
+### Changed
+- Backups now include generated invoice PDFs while remaining compatible with older backups.
+- Added the pinned ReportLab dependency for deterministic local PDF generation.
+- Invoice service-line `Rate` now means GST percentage, with a separate taxable `Amount` field.
+- Expected TDS is now entered as a percentage and calculated on taxable value; existing fixed-TDS drafts are migrated to the equivalent rate.
+- Same-state invoice previews now show separate CGST and SGST rates and amounts (for example, 9% + 9%) instead of printing only the combined 18% rate.
+- Reworked the GitHub README with the complete feature set, invoice workflow, architecture, setup, privacy, testing, and release information.
+
 ## [v0.2.0] - 2026-07-27
 
 ### Added

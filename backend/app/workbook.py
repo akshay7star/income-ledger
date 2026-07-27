@@ -8,12 +8,14 @@ from .financial_year import financial_year_for
 from .repositories import add_expense, add_income_record, dashboard_data, list_documents, list_users
 from .tax import calculate_tax_options
 from .tax_reconciliation import tax_statement_report
+from .invoices import list_generated_invoices
 
 
 SHEETS = [
     "Summary",
     "Income Records",
     "Expenses",
+    "Generated Invoices",
     "GST",
     "Tax",
     "Tax Documents",
@@ -312,6 +314,28 @@ def create_workbook_export(
     expense_sheet = wb["Expenses"]
     expense_fields = ["id", "user_id", "expense_date", "category", "amount", "gst_amount", "payment_method", "notes"]
     expense_sheet.append(["User", "Financial Year", *expense_fields])
+    generated_invoice_sheet = wb["Generated Invoices"]
+    generated_invoice_sheet.append([
+        "Ledger User",
+        "Financial Year",
+        "Invoice ID",
+        "Invoice Number",
+        "Status",
+        "Seller",
+        "Client",
+        "Invoice Date",
+        "Taxable Amount",
+        "CGST",
+        "SGST",
+        "IGST",
+        "GST",
+        "Grand Total",
+        "TDS Rate %",
+        "TDS Amount",
+        "Net Receivable",
+        "Income Record ID",
+        "PDF Available",
+    ])
     gst_sheet = wb["GST"]
     gst_sheet.append(["User", "Financial Year", "Month", "GST Collected", "GST Input Claims", "Net GST Payable"])
     tax_sheet = wb["Tax"]
@@ -402,6 +426,33 @@ def create_workbook_export(
 
             _append_accounting_statement(balance_sheet, user_name, selected_year, data)
             _append_tax_statement_export(tax_doc_sheet, tax_recon_sheet, tax_findings_sheet, selected_user, user_name, selected_year)
+
+    for selected_year in selected_years:
+        for invoice in list_generated_invoices(financial_year=selected_year):
+            linked_user_id = str(invoice.get("ledger_user_id") or "")
+            if linked_user_id and linked_user_id not in selected_users:
+                continue
+            generated_invoice_sheet.append([
+                users.get(linked_user_id, "Unlinked"),
+                invoice.get("financial_year"),
+                invoice.get("id"),
+                invoice.get("invoice_number"),
+                invoice.get("status"),
+                invoice.get("seller_name"),
+                invoice.get("client_name"),
+                invoice.get("invoice_date"),
+                invoice.get("subtotal_amount"),
+                invoice.get("cgst_amount"),
+                invoice.get("sgst_amount"),
+                invoice.get("igst_amount"),
+                invoice.get("gst_amount"),
+                invoice.get("grand_total_amount"),
+                invoice.get("tds_rate"),
+                invoice.get("tds_amount"),
+                invoice.get("net_receivable_amount"),
+                invoice.get("income_record_id"),
+                "Yes" if invoice.get("pdf_available") else "No",
+            ])
 
     documents = list_documents()
     document_sheet = wb["Documents"]

@@ -16,6 +16,7 @@ import {
   ListChecks,
   Moon,
   Plus,
+  ReceiptText,
   RefreshCw,
   MessageSquare,
   Settings as SettingsIcon,
@@ -39,8 +40,10 @@ import {
 } from 'recharts';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './styles.css';
+import InvoicesView from './InvoicesView';
 
 const API = 'http://127.0.0.1:8001/api';
+const APP_VERSION = '0.3.0';
 const AUTH_TOKEN_KEY = 'income-ledger-auth-token';
 const THEME_STORAGE_KEY = 'income-ledger-theme';
 
@@ -863,7 +866,10 @@ function App() {
     <main className="shell container-fluid">
       <header className="topbar shadow-sm">
         <div>
-          <h1>Income Ledger</h1>
+          <h1>
+            Income Ledger
+            <span className="appVersion">v{APP_VERSION}</span>
+          </h1>
           <p>Salary, freelance income, TDS, GST, and Indian FY tax estimates.</p>
         </div>
         <div className="actions topActions">
@@ -890,6 +896,10 @@ function App() {
         <button className={`viewNavButton ${activeView === 'dashboard' ? 'active' : ''}`} type="button" onClick={() => setActiveView('dashboard')}>
           <BarChart3 size={18} />
           Dashboard
+        </button>
+        <button className={`viewNavButton ${activeView === 'invoices' ? 'active' : ''}`} type="button" onClick={() => setActiveView('invoices')}>
+          <ReceiptText size={18} />
+          Invoices
         </button>
         <button className={`viewNavButton ${activeView === 'tax-planner' ? 'active' : ''}`} type="button" onClick={() => setActiveView('tax-planner')}>
           <Calculator size={18} />
@@ -977,7 +987,14 @@ function App() {
         <ExpenseForm users={users} selectedUser={selectedUser} onCreated={refresh} />
       </section>
 
-      {activeView === 'settings' ? (
+      {activeView === 'invoices' ? (
+        <InvoicesView
+          api={api}
+          apiBlob={apiBlob}
+          users={users}
+          selectedYear={selectedYear}
+        />
+      ) : activeView === 'settings' ? (
         <SettingsPanel
           users={users}
           years={years}
