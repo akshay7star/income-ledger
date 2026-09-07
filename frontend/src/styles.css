@@ -921,6 +921,41 @@ h1 {
   grid-column: 1 / -1;
 }
 
+.settingsForm .mobileSyncToggle {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.mobileSyncToggle input {
+  accent-color: var(--app-primary);
+  height: 18px;
+  width: 18px;
+}
+
+.mobileSyncStatus {
+  align-items: center;
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  color: var(--app-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 9px 12px;
+  grid-column: 1 / -1;
+  padding: 11px 12px;
+}
+
+.mobileSyncStatus span:last-child:not(:first-child) {
+  flex-basis: 100%;
+}
+
+.mobileSyncPanel .settingsActions {
+  flex-wrap: wrap;
+}
+
 .reconcileHeader {
   align-items: center;
   display: flex;

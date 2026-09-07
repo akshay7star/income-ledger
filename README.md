@@ -38,6 +38,8 @@ Financial data stays on the user's computer by default. The application uses a F
 
 - Create, edit, filter, and delete expenses.
 - Calculate expense GST and track payment methods.
+- Capture expenses from an Android home-screen app backed by a private Google Sheet.
+- Import pending mobile rows automatically at laptop-server startup, with duplicate protection, audit history, and visible `PENDING`/`SYNCED`/`ERROR` flags in the Sheet.
 - Export multi-sheet Excel workbooks containing income, expenses, tax summaries, tax documents, reconciliation findings, invoice metadata, and audit data.
 - Import supported structured workbook data.
 
@@ -78,6 +80,7 @@ React + Vite browser UI
       FastAPI API
           |
           +-- SQLite ledger
+          +-- Google Apps Script sync --> Private Google Sheet
           +-- Uploaded source documents
           +-- Generated invoice PDFs
           +-- Local ZIP backups
@@ -161,6 +164,28 @@ CLOUD_AI_MODEL=
 ```
 
 The cloud API key is entered through Settings and is not required for normal ledger, invoice, reconciliation, or tax-calculation features.
+
+### Android expense entry with a private Google Sheet
+
+The mobile client is a phone-first Google Apps Script web app. It can be added to the Android home screen, works while the laptop is off, and writes only to a private Sheet owned by the configured Google account. The Sheet contains the same expense fields used by SQLite plus sync columns including `sync_status`, `synced_at`, `sql_expense_id`, and `sync_error`.
+
+Deployment source and the step-by-step guide are in [`mobile/google-apps-script`](mobile/google-apps-script/README.md). After deploying it:
+
+1. Open desktop **Settings → Google Sheet mobile sync**.
+2. Paste the Apps Script `/exec` URL and private sync key.
+3. Enable startup sync, save, and select **Sync now** once to upload the desktop user list.
+4. Open the web app on Android and use **Add to Home screen**.
+
+The sync is idempotent: every mobile row has a stable `entry_id`, and SQLite records it before the Sheet is marked `SYNCED`. A network interruption cannot create a duplicate expense on the next startup.
+
+The same connection can be preconfigured through environment variables if preferred:
+
+```env
+GOOGLE_SHEET_SYNC_ENABLED=true
+GOOGLE_APPS_SCRIPT_URL=https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec
+```
+
+Keep the sync key in the desktop Settings screen rather than committing it to `.env`.
 
 ### OCR for scanned PDFs
 

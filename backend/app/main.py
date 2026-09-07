@@ -46,6 +46,7 @@ from .repositories import (
 from .tax import calculate_quarterly_advance_tax, calculate_tax_for_financial_year, calculate_tax_options, completed_financial_year_months, estimate_year_end, tax_slabs_catalog
 from .financial_year import parse_date_strict
 from .settings import get_settings, update_settings
+from .mobile_sync import MobileSyncError, get_mobile_sync_status, sync_google_sheet_expenses
 from .review import list_audit_events, reconciliation_report, validation_report
 from .tax_documents import (
     activate_tax_document,
@@ -256,6 +257,10 @@ class SettingsUpdate(BaseModel):
     cloud_ai_model: str | None = None
     cloud_ai_api_key: str | None = None
     clear_cloud_ai_api_key: bool | None = None
+    google_sheet_sync_enabled: bool | None = None
+    google_apps_script_url: str | None = None
+    google_sheet_sync_secret: str | None = None
+    clear_google_sheet_sync_secret: bool | None = None
 
 
 class TaxPlanningInputs(BaseModel):
@@ -475,6 +480,19 @@ def tax_document_activate(document_id: int) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/mobile-sync/status")
+def mobile_sync_status() -> dict:
+    return get_mobile_sync_status()
+
+
+@app.post("/api/mobile-sync")
+def mobile_sync_run() -> dict:
+    try:
+        return sync_google_sheet_expenses()
+    except MobileSyncError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/api/tax-reconciliation/{user_id}/{financial_year}")
 def tax_reconciliation(user_id: str, financial_year: str) -> dict:
     return tax_statement_report(user_id, financial_year)
@@ -651,6 +669,8 @@ def save_existing_tax_statement(
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    if get_settings().get("google_sheet_sync_enabled") == "true":
+        sync_google_sheet_expenses()
 
 
 @app.get("/api/health")

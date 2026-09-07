@@ -15,11 +15,13 @@ SETTING_DEFAULTS: dict[str, str] = {
     "local_ai_rendered_pages": os.getenv("LOCAL_AI_RENDERED_PAGES", "1"),
     "cloud_ai_base_url": os.getenv("CLOUD_AI_BASE_URL", "https://api.openai.com/v1"),
     "cloud_ai_model": os.getenv("CLOUD_AI_MODEL", ""),
+    "google_sheet_sync_enabled": os.getenv("GOOGLE_SHEET_SYNC_ENABLED", "false").lower(),
+    "google_apps_script_url": os.getenv("GOOGLE_APPS_SCRIPT_URL", ""),
 }
 
 PUBLIC_SETTING_KEYS = set(SETTING_DEFAULTS)
-SECRET_SETTING_KEYS = {"cloud_ai_api_key"}
-CONTROL_SETTING_KEYS = {"clear_cloud_ai_api_key"}
+SECRET_SETTING_KEYS = {"cloud_ai_api_key", "google_sheet_sync_secret"}
+CONTROL_SETTING_KEYS = {"clear_cloud_ai_api_key", "clear_google_sheet_sync_secret"}
 UPDATE_SETTING_KEYS = PUBLIC_SETTING_KEYS | SECRET_SETTING_KEYS | CONTROL_SETTING_KEYS
 
 
@@ -37,6 +39,8 @@ def _clean_value(key: str, value: Any) -> str:
         return str(number)
     if key == "default_user_id":
         return text or "all"
+    if key == "google_sheet_sync_enabled":
+        return "true" if text.lower() in {"1", "true", "yes", "on"} else "false"
     return text
 
 
@@ -59,6 +63,7 @@ def get_settings() -> dict[str, str]:
     values = dict(SETTING_DEFAULTS)
     values.update({row["key"]: row["value"] for row in rows})
     values["cloud_ai_api_key_set"] = "true" if get_secret_setting("cloud_ai_api_key") else "false"
+    values["google_sheet_sync_secret_set"] = "true" if get_secret_setting("google_sheet_sync_secret") else "false"
     return values
 
 
@@ -69,6 +74,7 @@ def update_settings(payload: dict[str, Any]) -> dict[str, str]:
     cleaned = {key: _clean_value(key, value) for key, value in payload.items() if key in PUBLIC_SETTING_KEYS}
     secret_updates = {key: str(value).strip() for key, value in payload.items() if key in SECRET_SETTING_KEYS and str(value).strip()}
     clear_cloud_ai_api_key = bool(payload.get("clear_cloud_ai_api_key"))
+    clear_google_sheet_sync_secret = bool(payload.get("clear_google_sheet_sync_secret"))
     with get_connection() as conn:
         for key, value in cleaned.items():
             conn.execute(
@@ -83,6 +89,8 @@ def update_settings(payload: dict[str, Any]) -> dict[str, str]:
             )
         if clear_cloud_ai_api_key:
             conn.execute("DELETE FROM app_settings WHERE key = ?", ("cloud_ai_api_key",))
+        if clear_google_sheet_sync_secret:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", ("google_sheet_sync_secret",))
         for key, value in secret_updates.items():
             conn.execute(
                 """

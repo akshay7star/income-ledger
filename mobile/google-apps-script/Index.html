@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#172554">
+    <style>
+      :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, sans-serif; background: #eef2ff; color: #172554; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: linear-gradient(160deg, #dbeafe 0%, #eef2ff 46%, #f8fafc 100%); }
+      main { width: min(100%, 520px); margin: 0 auto; min-height: 100vh; padding: max(22px, env(safe-area-inset-top)) 18px max(28px, env(safe-area-inset-bottom)); }
+      header { display: flex; gap: 14px; align-items: center; margin-bottom: 22px; }
+      .mark { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 15px; background: #172554; color: white; font-size: 24px; box-shadow: 0 10px 24px #1e3a8a33; }
+      h1 { margin: 0; font-size: 23px; letter-spacing: -.02em; }
+      header p { margin: 3px 0 0; color: #64748b; font-size: 13px; }
+      .card { background: #ffffffeb; border: 1px solid #fff; border-radius: 22px; padding: 20px; box-shadow: 0 18px 50px #1e3a8a1f; backdrop-filter: blur(14px); }
+      .grid { display: grid; gap: 15px; }
+      label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; color: #334155; }
+      input, select, textarea, button { width: 100%; border-radius: 12px; font: inherit; }
+      input, select, textarea { border: 1px solid #cbd5e1; padding: 12px 13px; background: white; color: #0f172a; outline: none; }
+      input:focus, select:focus, textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 3px #3b82f626; }
+      textarea { min-height: 82px; resize: vertical; }
+      .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .total { background: #eff6ff; border-radius: 14px; padding: 13px 15px; display: flex; justify-content: space-between; align-items: center; }
+      .total span { color: #64748b; font-size: 13px; }
+      .total strong { font-size: 20px; }
+      button { border: 0; padding: 14px 16px; background: #1d4ed8; color: white; font-weight: 800; cursor: pointer; box-shadow: 0 9px 20px #2563eb33; }
+      button:disabled { opacity: .62; cursor: wait; }
+      .status { margin-top: 14px; border-radius: 12px; padding: 11px 13px; font-size: 13px; display: none; }
+      .status.ok { display: block; background: #dcfce7; color: #166534; }
+      .status.error { display: block; background: #fee2e2; color: #991b1b; }
+      .pending { margin: 0 0 14px; color: #475569; font-size: 13px; }
+      .unlock p { color: #64748b; line-height: 1.45; }
+      .hidden { display: none; }
+      footer { text-align: center; color: #94a3b8; font-size: 11px; margin-top: 16px; }
+      @media (max-width: 380px) { .two { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="mark">₹</div>
+        <div><h1>Income Ledger</h1><p>Quick mobile expense entry</p></div>
+      </header>
+
+      <section id="unlockCard" class="card unlock">
+        <h2>Connect this phone</h2>
+        <p>Enter the private sync key shown by <code>setupIncomeLedger()</code>. It is stored only in this browser.</p>
+        <div class="grid">
+          <label>Connection key<input id="secret" type="password" autocomplete="current-password" placeholder="Private sync key"></label>
+          <button id="connectButton" type="button">Connect</button>
+        </div>
+        <div id="unlockStatus" class="status"></div>
+      </section>
+
+      <section id="expenseCard" class="card hidden">
+        <p id="pending" class="pending"></p>
+        <form id="expenseForm" class="grid">
+          <label>Ledger user<select id="userId" required></select></label>
+          <label>Date<input id="expenseDate" type="date" required></label>
+          <label>Category<input id="category" list="categories" autocomplete="off" placeholder="e.g. Software" required></label>
+          <datalist id="categories">
+            <option value="Software"><option value="Travel"><option value="Fuel"><option value="Office supplies"><option value="Professional services"><option value="Telephone & internet"><option value="Marketing"><option value="Meals"><option value="Purchase invoice"><option value="Other">
+          </datalist>
+          <div class="two">
+            <label>Amount before GST<input id="baseAmount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="0.00" required></label>
+            <label>GST rate<select id="gstRate"><option value="0">No GST</option><option value="5">5%</option><option value="12">12%</option><option value="18">18%</option><option value="28">28%</option></select></label>
+          </div>
+          <div class="total"><span>Total / GST claim</span><strong id="total">₹0.00 / ₹0.00</strong></div>
+          <label>Payment method<select id="paymentMethod"><option value="">Select</option><option>UPI</option><option>Cash</option><option>Credit Card</option><option selected>Debit Card</option><option>Net Banking</option><option>Bank Transfer</option><option>Promissory Note</option></select></label>
+          <label>Notes<textarea id="notes" placeholder="Vendor or purpose (optional)"></textarea></label>
+          <button id="saveButton" type="submit">Save expense</button>
+        </form>
+        <div id="saveStatus" class="status"></div>
+      </section>
+      <footer>Rows sync automatically when the Income Ledger laptop server starts.</footer>
+    </main>
+
+    <script>
+      const storageKey = 'income-ledger-google-sync-key';
+      const secretInput = document.getElementById('secret');
+      const unlockCard = document.getElementById('unlockCard');
+      const expenseCard = document.getElementById('expenseCard');
+      const connectButton = document.getElementById('connectButton');
+      const form = document.getElementById('expenseForm');
+      const saveButton = document.getElementById('saveButton');
+      const baseAmount = document.getElementById('baseAmount');
+      const gstRate = document.getElementById('gstRate');
+      let syncKey = localStorage.getItem(storageKey) || '';
+
+      function todayLocal() {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      }
+
+      function showStatus(id, message, type) {
+        const node = document.getElementById(id);
+        node.textContent = message;
+        node.className = `status ${type}`;
+      }
+
+      function calculate() {
+        const base = Number(baseAmount.value || 0);
+        const rate = Number(gstRate.value || 0);
+        const gst = Math.round(base * rate) / 100;
+        const total = base + gst;
+        document.getElementById('total').textContent = `₹${total.toFixed(2)} / ₹${gst.toFixed(2)}`;
+      }
+
+      function connect(candidate) {
+        connectButton.disabled = true;
+        google.script.run
+          .withSuccessHandler((data) => {
+            syncKey = candidate;
+            localStorage.setItem(storageKey, syncKey);
+            const select = document.getElementById('userId');
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Select user';
+            select.replaceChildren(placeholder);
+            data.users.forEach((user) => {
+              const option = document.createElement('option');
+              option.value = String(user.id);
+              option.textContent = user.name;
+              select.appendChild(option);
+            });
+            document.getElementById('pending').textContent = `${data.pendingCount} expense${data.pendingCount === 1 ? '' : 's'} waiting for laptop sync.`;
+            unlockCard.classList.add('hidden');
+            expenseCard.classList.remove('hidden');
+            connectButton.disabled = false;
+          })
+          .withFailureHandler((error) => {
+            localStorage.removeItem(storageKey);
+            syncKey = '';
+            connectButton.disabled = false;
+            showStatus('unlockStatus', error.message || String(error), 'error');
+          })
+          .getBootstrapData(candidate);
+      }
+
+      connectButton.addEventListener('click', () => {
+        const candidate = secretInput.value.trim();
+        if (!candidate) return showStatus('unlockStatus', 'Enter the connection key.', 'error');
+        connect(candidate);
+      });
+      baseAmount.addEventListener('input', calculate);
+      gstRate.addEventListener('change', calculate);
+      document.getElementById('expenseDate').value = todayLocal();
+
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        saveButton.disabled = true;
+        showStatus('saveStatus', 'Saving…', 'ok');
+        const payload = {
+          user_id: document.getElementById('userId').value,
+          expense_date: document.getElementById('expenseDate').value,
+          category: document.getElementById('category').value,
+          base_amount: baseAmount.value,
+          gst_rate: gstRate.value,
+          payment_method: document.getElementById('paymentMethod').value,
+          notes: document.getElementById('notes').value,
+        };
+        google.script.run
+          .withSuccessHandler((result) => {
+            showStatus('saveStatus', `Saved ₹${Number(result.totalAmount).toFixed(2)}. It will sync when the laptop app starts.`, 'ok');
+            const userId = document.getElementById('userId').value;
+            form.reset();
+            document.getElementById('userId').value = userId;
+            document.getElementById('expenseDate').value = todayLocal();
+            calculate();
+            saveButton.disabled = false;
+          })
+          .withFailureHandler((error) => {
+            showStatus('saveStatus', error.message || String(error), 'error');
+            saveButton.disabled = false;
+          })
+          .saveExpense(syncKey, payload);
+      });
+
+      if (syncKey) connect(syncKey);
+    </script>
+  </body>
+</html>

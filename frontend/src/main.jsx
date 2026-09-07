@@ -20,6 +20,7 @@ import {
   RefreshCw,
   MessageSquare,
   Settings as SettingsIcon,
+  Smartphone,
   Sun,
   Trash2,
   Upload,
@@ -1301,6 +1302,10 @@ function SettingsPanel({ users, years, selectedUser, selectedYear, onApplyPrefer
     cloud_ai_model: '',
     cloud_ai_api_key: '',
     cloud_ai_api_key_set: 'false',
+    google_sheet_sync_enabled: 'false',
+    google_apps_script_url: '',
+    google_sheet_sync_secret: '',
+    google_sheet_sync_secret_set: 'false',
   });
   const [pinForm, setPinForm] = useState({ current_pin: '', new_pin: '', confirm_pin: '' });
   const [history, setHistory] = useState([]);
@@ -1311,14 +1316,17 @@ function SettingsPanel({ users, years, selectedUser, selectedYear, onApplyPrefer
   const [taxRuleYear, setTaxRuleYear] = useState(selectedYear || '');
   const [taxRuleDraft, setTaxRuleDraft] = useState(null);
   const [taxRulePin, setTaxRulePin] = useState('');
+  const [syncStatus, setSyncStatus] = useState(null);
 
   async function loadSettings() {
-    const [settingsData, historyData] = await Promise.all([
+    const [settingsData, historyData, mobileSyncData] = await Promise.all([
       api('/settings'),
       api('/backup/history'),
+      api('/mobile-sync/status'),
     ]);
     setSettings(settingsData);
     setHistory(historyData);
+    setSyncStatus(mobileSyncData);
   }
 
   useEffect(() => {
@@ -1341,7 +1349,9 @@ function SettingsPanel({ users, years, selectedUser, selectedYear, onApplyPrefer
     try {
       const payload = { ...settings };
       delete payload.cloud_ai_api_key_set;
+      delete payload.google_sheet_sync_secret_set;
       if (!payload.cloud_ai_api_key) delete payload.cloud_ai_api_key;
+      if (!payload.google_sheet_sync_secret) delete payload.google_sheet_sync_secret;
       const updated = await api('/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1352,6 +1362,69 @@ function SettingsPanel({ users, years, selectedUser, selectedYear, onApplyPrefer
       setMessage('Settings saved.');
     } catch (saveError) {
       setError(saveError.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function saveMobileSyncSettings() {
+    setBusy('mobile-sync-settings');
+    setError('');
+    setMessage('');
+    try {
+      const payload = {
+        google_sheet_sync_enabled: settings.google_sheet_sync_enabled === true || settings.google_sheet_sync_enabled === 'true',
+        google_apps_script_url: settings.google_apps_script_url || '',
+      };
+      if (settings.google_sheet_sync_secret) payload.google_sheet_sync_secret = settings.google_sheet_sync_secret;
+      const updated = await api('/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setSettings((current) => ({ ...current, ...updated, google_sheet_sync_secret: '' }));
+      setSyncStatus(await api('/mobile-sync/status'));
+      setMessage('Google Sheet mobile sync settings saved.');
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function runMobileSync() {
+    setBusy('mobile-sync');
+    setError('');
+    setMessage('');
+    try {
+      const result = await api('/mobile-sync', { method: 'POST' });
+      setSyncStatus(await api('/mobile-sync/status'));
+      if (result.status === 'failed') throw new Error(result.message);
+      setMessage(result.message || 'Mobile expenses synced.');
+    } catch (syncError) {
+      setError(syncError.message);
+      api('/mobile-sync/status').then(setSyncStatus).catch(() => {});
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function clearMobileSyncKey() {
+    if (!window.confirm('Remove the saved Google Sheet sync key from this app?')) return;
+    setBusy('clear-mobile-sync-key');
+    setError('');
+    setMessage('');
+    try {
+      const updated = await api('/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear_google_sheet_sync_secret: true, google_sheet_sync_enabled: false }),
+      });
+      setSettings((current) => ({ ...current, ...updated, google_sheet_sync_secret: '' }));
+      setSyncStatus(await api('/mobile-sync/status'));
+      setMessage('Google Sheet sync key cleared and automatic sync disabled.');
+    } catch (clearError) {
+      setError(clearError.message);
     } finally {
       setBusy('');
     }
@@ -1614,6 +1687,71 @@ function SettingsPanel({ users, years, selectedUser, selectedYear, onApplyPrefer
             </button>
           </div>
         </form>
+      </div>
+
+      <div className="panel shadow-sm settingsPanel mobileSyncPanel">
+        <h2><Smartphone size={18} /> Google Sheet mobile sync</h2>
+        <p className="muted">Enter expenses from the Android home-screen app. Pending Sheet rows are imported automatically whenever the laptop server starts.</p>
+        <div className="settingsForm">
+          <label className="mobileSyncToggle">
+            <input
+              type="checkbox"
+              checked={settings.google_sheet_sync_enabled === true || settings.google_sheet_sync_enabled === 'true'}
+              onChange={(event) => setSetting('google_sheet_sync_enabled', event.target.checked)}
+            />
+            Enable automatic startup sync
+          </label>
+          <label>Apps Script web app URL
+            <input
+              className="form-control"
+              type="url"
+              value={settings.google_apps_script_url || ''}
+              onChange={(event) => setSetting('google_apps_script_url', event.target.value)}
+              placeholder="https://script.google.com/macros/s/.../exec"
+            />
+          </label>
+          <label>Private sync key
+            <input
+              className="form-control"
+              type="password"
+              value={settings.google_sheet_sync_secret || ''}
+              onChange={(event) => setSetting('google_sheet_sync_secret', event.target.value)}
+              placeholder={settings.google_sheet_sync_secret_set === 'true' ? 'Saved - leave blank to keep' : 'Paste setupIncomeLedger sync key'}
+            />
+          </label>
+          <div className="mobileSyncStatus">
+            <span className={`badge ${syncStatus?.enabled ? 'text-bg-success' : 'text-bg-secondary'}`}>
+              {syncStatus?.enabled ? 'Enabled' : 'Disabled'}
+            </span>
+            <span>{syncStatus?.tracked_entries || 0} mobile entries tracked locally</span>
+            {syncStatus?.last_run && (
+              <span>
+                Last run: {new Date(syncStatus.last_run.completed_at).toLocaleString()} — {syncStatus.last_run.message}
+              </span>
+            )}
+          </div>
+          <div className="settingsActions">
+            <button className="btn btn-primary" type="button" onClick={saveMobileSyncSettings} disabled={busy === 'mobile-sync-settings'}>
+              <Check size={16} /> {busy === 'mobile-sync-settings' ? 'Saving...' : 'Save mobile sync'}
+            </button>
+            <button className="btn btn-outline-primary" type="button" onClick={runMobileSync} disabled={busy === 'mobile-sync' || !syncStatus?.configured}>
+              <RefreshCw size={16} /> {busy === 'mobile-sync' ? 'Syncing...' : 'Sync now'}
+            </button>
+            {settings.google_apps_script_url && (
+              <a className="btn btn-outline-secondary" href={settings.google_apps_script_url} target="_blank" rel="noreferrer">
+                <Smartphone size={16} /> Open mobile app
+              </a>
+            )}
+            <button
+              className="btn btn-outline-danger"
+              type="button"
+              onClick={clearMobileSyncKey}
+              disabled={busy === 'clear-mobile-sync-key' || settings.google_sheet_sync_secret_set !== 'true'}
+            >
+              <X size={16} /> Clear key
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="panel shadow-sm settingsPanel">

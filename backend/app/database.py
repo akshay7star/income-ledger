@@ -297,6 +297,32 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS mobile_expense_sync (
+                entry_id TEXT PRIMARY KEY,
+                source TEXT NOT NULL DEFAULT 'google_sheet',
+                expense_id INTEGER UNIQUE,
+                raw_payload_json TEXT NOT NULL DEFAULT '{}',
+                synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(expense_id) REFERENCES freelance_expenses(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS mobile_sync_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                received_count INTEGER NOT NULL DEFAULT 0,
+                imported_count INTEGER NOT NULL DEFAULT 0,
+                duplicate_count INTEGER NOT NULL DEFAULT 0,
+                error_count INTEGER NOT NULL DEFAULT 0,
+                message TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mobile_expense_sync_expense
+                ON mobile_expense_sync(expense_id);
+            CREATE INDEX IF NOT EXISTS idx_mobile_sync_runs_completed
+                ON mobile_sync_runs(completed_at DESC);
+
             CREATE TABLE IF NOT EXISTS tax_statement_summaries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tax_document_id INTEGER NOT NULL,

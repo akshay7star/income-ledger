@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Added an Android-friendly Google Apps Script expense-entry app backed by a private Google Sheet.
+- Added automatic startup and manual Sheet-to-SQL expense sync with local idempotency tracking, audit events, user-list synchronization, and sync-run status.
+- Added Sheet flags for pending, synced, and errored rows, including the linked SQLite expense ID.
+- Added desktop Settings controls for the Apps Script URL, private sync key, startup sync, status, and manual sync.
+- Added regression tests covering mobile imports, duplicate prevention, row result reporting, and secret-setting privacy.
+
 ## [v0.3.0] - 2026-07-27
 
 ### Added
