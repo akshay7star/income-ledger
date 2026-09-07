@@ -827,7 +827,14 @@ export default function InvoicesView({ api, apiBlob, users, selectedYear }) {
   }
 
   async function remove(invoice) {
-    if (!window.confirm(`Delete draft ${invoice.invoice_number}?`)) return;
+    const isCancelled = invoice.status === 'cancelled';
+    const linkedIncomeNote = invoice.linked_income
+      ? '\n\nThe linked income record will remain in the ledger.'
+      : '';
+    const message = isCancelled
+      ? `Permanently delete cancelled invoice ${invoice.invoice_number} and its PDF? This will allow the invoice number to be reused.${linkedIncomeNote}`
+      : `Delete draft ${invoice.invoice_number}?`;
+    if (!window.confirm(message)) return;
     setError('');
     try {
       await api(`/invoices/${invoice.id}`, { method: 'DELETE' });
@@ -937,7 +944,16 @@ export default function InvoicesView({ api, apiBlob, users, selectedYear }) {
                       <div className="invoiceRowActions">
                         {invoice.status === 'draft' && <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => edit(invoice)} title="Edit draft"><Edit size={15} /></button>}
                         <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openPreview(invoice)} title="Preview PDF"><Eye size={15} /></button>
-                        {invoice.status === 'draft' && <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => remove(invoice)} title="Delete draft"><Trash2 size={15} /></button>}
+                        {(invoice.status === 'draft' || invoice.status === 'cancelled') && (
+                          <button
+                            className="btn btn-sm btn-outline-danger"
+                            type="button"
+                            onClick={() => remove(invoice)}
+                            title={invoice.status === 'cancelled' ? 'Delete cancelled invoice' : 'Delete draft'}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
                         {invoice.status === 'issued' && <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => setCancelTarget(invoice)} title="Cancel invoice"><X size={15} /></button>}
                       </div>
                     </td>

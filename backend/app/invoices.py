@@ -903,7 +903,8 @@ def update_invoice_draft(invoice_id: int, payload: dict) -> dict:
     return get_invoice(invoice_id)
 
 
-def delete_invoice_draft(invoice_id: int) -> dict:
+def delete_invoice(invoice_id: int) -> dict:
+    pdf_path: Path | None = None
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM generated_invoices WHERE id = ?", (invoice_id,)
@@ -911,25 +912,51 @@ def delete_invoice_draft(invoice_id: int) -> dict:
         if not row:
             raise KeyError("Invoice not found")
         invoice = row_to_dict(row)
-        if invoice["status"] != "draft":
-            raise InvoiceConflictError("Only draft invoices can be deleted.")
+        if invoice["status"] not in {"draft", "cancelled"}:
+            raise InvoiceConflictError("Only draft or cancelled invoices can be deleted.")
+        if invoice["status"] == "draft":
+            pdf_path = _draft_pdf_path(invoice_id, invoice["invoice_number"])
+        elif invoice.get("pdf_path"):
+            pdf_path = _safe_generated_path(invoice["pdf_path"])
         before_json = json.dumps(
             {
                 "generated_invoice_id": invoice_id,
                 "invoice_number": invoice["invoice_number"],
+                "financial_year": invoice["financial_year"],
                 "status": invoice["status"],
+                "income_record_id": invoice.get("income_record_id"),
+                "pdf_path": invoice.get("pdf_path") or "",
             }
         )
         conn.execute("DELETE FROM generated_invoices WHERE id = ?", (invoice_id,))
         conn.execute(
             """
             INSERT INTO audit_events (document_id, user_id, event_type, before_json, after_json)
-            VALUES (NULL, ?, 'delete_invoice_draft', ?, '{}')
+            VALUES (NULL, ?, ?, ?, ?)
             """,
-            (invoice.get("ledger_user_id"), before_json),
+            (
+                invoice.get("ledger_user_id"),
+                "delete_invoice_draft" if invoice["status"] == "draft" else "delete_cancelled_invoice",
+                before_json,
+                json.dumps({"deleted": True, "income_record_preserved": bool(invoice.get("income_record_id"))}),
+            ),
         )
-    _remove_draft_preview(invoice_id, invoice["invoice_number"])
-    return {"deleted": True, "id": invoice_id}
+    pdf_deleted = False
+    if pdf_path and pdf_path.exists():
+        pdf_path.unlink()
+        pdf_deleted = True
+    return {
+        "deleted": True,
+        "id": invoice_id,
+        "status": invoice["status"],
+        "pdf_deleted": pdf_deleted,
+        "income_record_preserved": bool(invoice.get("income_record_id")),
+    }
+
+
+def delete_invoice_draft(invoice_id: int) -> dict:
+    """Backward-compatible entry point for callers that delete draft invoices."""
+    return delete_invoice(invoice_id)
 
 
 def _reportlab():
@@ -1018,6 +1045,39 @@ def _draw_right(c, text: Any, right: float, top: float, size: float = 8.5, font:
 def _draw_center(c, text: Any, center: float, top: float, size: float = 8.5, font: str = "Helvetica") -> None:
     c.setFont(font, size)
     c.drawCentredString(center, 792 - top - size, _clean(text))
+
+
+def _draw_cell_text(
+    c,
+    text: Any,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+    size: float = 8,
+    font: str = "Helvetica",
+    *,
+    align: str = "center",
+    padding: float = 3,
+    leading: float | None = None,
+) -> None:
+    """Draw one or more lines vertically centred inside a table cell."""
+    from reportlab.pdfbase.pdfmetrics import getAscentDescent
+
+    lines = _clean(text).splitlines() or [""]
+    leading = leading or size + 0.5
+    ascent, descent = getAscentDescent(font, size)
+    block_height = ascent - descent + (len(lines) - 1) * leading
+    baseline_from_top = top + max(0, (bottom - top - block_height) / 2) + ascent
+    c.setFont(font, size)
+    for index, line_text in enumerate(lines):
+        y = 792 - baseline_from_top - index * leading
+        if align == "left":
+            c.drawString(left + padding, y, line_text)
+        elif align == "right":
+            c.drawRightString(right - padding, y, line_text)
+        else:
+            c.drawCentredString((left + right) / 2, y, line_text)
 
 
 def _line(c, x1: float, top1: float, x2: float, top2: float, width: float = 0.375) -> None:
@@ -1261,30 +1321,70 @@ def _draw_final_summary(c, invoice: dict) -> None:
     hsn_label = ", ".join(hsn_values) or "-"
     if invoice["gst_treatment"] == "same_state":
         columns = [36, 231.24, 283.68, 315.24, 367.56, 399, 451.44, 504]
-        for x in columns[1:-1]:
+        group_header_bottom = 523.4
+        header_bottom = 533.8
+        item_bottom = 544.55
+        for x in [columns[1], columns[2], columns[4], columns[6]]:
             _line(c, x, summary_top, x, summary_bottom)
-        _line(c, 283.68, 523.4, 367.56, 523.4)
-        _line(c, 367.56, 523.4, 451.44, 523.4)
-        _draw_center(c, "HSN/SAC", 133.5, 515, 8)
-        _draw_center(c, "Taxable", 257.5, 515, 7.5)
-        _draw_center(c, "CGST", 325.5, 515, 8)
-        _draw_center(c, "SGST/UTGST", 409.5, 515, 8)
-        _draw_center(c, "Total Tax", 477.5, 515, 7.5)
-        for label, center in [("Rate", 299.5), ("Amount", 341.5), ("Rate", 383.3), ("Amount", 425.2)]:
-            _draw_center(c, label, center, 525, 7.2)
+        for x in [columns[3], columns[5]]:
+            _line(c, x, group_header_bottom, x, summary_bottom)
+        _line(c, 283.68, group_header_bottom, 367.56, group_header_bottom)
+        _line(c, 367.56, group_header_bottom, 451.44, group_header_bottom)
+        _line(c, 36, header_bottom, 504, header_bottom)
+        _line(c, 36, item_bottom, 504, item_bottom)
+
+        _draw_cell_text(c, "HSN/SAC", columns[0], columns[1], summary_top, header_bottom, 8)
+        _draw_cell_text(c, "Taxable\nValue", columns[1], columns[2], summary_top, header_bottom, 7.5, leading=7.5)
+        _draw_cell_text(c, "CGST", columns[2], columns[4], summary_top, group_header_bottom, 8)
+        _draw_cell_text(c, "SGST/UTGST", columns[4], columns[6], summary_top, group_header_bottom, 8)
+        _draw_cell_text(c, "Total\nTax Amount", columns[6], columns[7], summary_top, header_bottom, 7.5, leading=7.5)
+        _draw_cell_text(c, "Rate", columns[2], columns[3], group_header_bottom, header_bottom, 7.2)
+        _draw_cell_text(c, "Amount", columns[3], columns[4], group_header_bottom, header_bottom, 7.2)
+        _draw_cell_text(c, "Rate", columns[4], columns[5], group_header_bottom, header_bottom, 7.2)
+        _draw_cell_text(c, "Amount", columns[5], columns[6], group_header_bottom, header_bottom, 7.2)
+
         rate = max((float(item.get("cgst_rate") or 0) for item in invoice["items"]), default=0)
-        values = [
-            (hsn_label, 39),
-            (_format_money(invoice["subtotal_amount"]), 280),
-            (f"{rate:g}%", 312),
-            (_format_money(invoice["cgst_amount"]), 365),
-            (f"{rate:g}%", 396),
-            (_format_money(invoice["sgst_amount"]), 449),
-            (_format_money(invoice["gst_amount"]), 501),
+        item_values = [
+            (hsn_label, 0, "left", "Helvetica"),
+            (_format_money(invoice["subtotal_amount"]), 1, "right", "Helvetica"),
+            (f"{rate:g}%", 2, "right", "Helvetica"),
+            (_format_money(invoice["cgst_amount"]), 3, "right", "Helvetica"),
+            (f"{rate:g}%", 4, "right", "Helvetica"),
+            (_format_money(invoice["sgst_amount"]), 5, "right", "Helvetica"),
+            (_format_money(invoice["gst_amount"]), 6, "right", "Helvetica"),
         ]
-        _draw_text(c, values[0][0], values[0][1], 537, 7.8)
-        for value, right in values[1:]:
-            _draw_right(c, value, right, 537, 7.8, "Helvetica-Bold" if right in {280, 365, 449, 501} else "Helvetica")
+        for value, column_index, align, font in item_values:
+            _draw_cell_text(
+                c,
+                value,
+                columns[column_index],
+                columns[column_index + 1],
+                header_bottom,
+                item_bottom,
+                7.8,
+                font,
+                align=align,
+            )
+
+        total_values = [
+            ("Total", 0),
+            (_format_money(invoice["subtotal_amount"]), 1),
+            (_format_money(invoice["cgst_amount"]), 3),
+            (_format_money(invoice["sgst_amount"]), 5),
+            (_format_money(invoice["gst_amount"]), 6),
+        ]
+        for value, column_index in total_values:
+            _draw_cell_text(
+                c,
+                value,
+                columns[column_index],
+                columns[column_index + 1],
+                item_bottom,
+                summary_bottom,
+                7.8,
+                "Helvetica-Bold",
+                align="right",
+            )
     elif invoice["gst_treatment"] == "inter_state":
         columns = [36, 231.24, 315.24, 399, 504]
         for x in columns[1:-1]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -262,6 +263,11 @@ def test_preview_issue_link_and_cancel(invoice_env):
     preview_reader = PdfReader(str(preview_path))
     assert float(preview_reader.pages[0].mediabox.width) == 612
     assert float(preview_reader.pages[0].mediabox.height) == 792
+    page_commands = preview_reader.pages[0].get_contents().get_data().decode("latin-1")
+    assert re.search(r"315\.24 268\.6 m 315\.24 236\.7 l S", page_commands)
+    assert re.search(r"399 268\.6 m 399 236\.7 l S", page_commands)
+    assert not re.search(r"315\.24 279 m 315\.24 236\.7 l S", page_commands)
+    assert not re.search(r"399 279 m 399 236\.7 l S", page_commands)
     preview_text = "\n".join(page.extract_text() or "" for page in preview_reader.pages)
     assert "Tax Invoice" in preview_text
     assert "DRAFT" in preview_text
@@ -269,6 +275,8 @@ def test_preview_issue_link_and_cancel(invoice_env):
     assert "Output-CGST-9%" in preview_text
     assert "Output-SGST-9%" in preview_text
     assert "25,499.97" in preview_text
+    assert "Taxable\nValue" in preview_text
+    assert preview_text.count("Total") >= 3
 
     issued = invoices.issue_invoice(
         draft["id"],
@@ -304,6 +312,14 @@ def test_preview_issue_link_and_cancel(invoice_env):
     assert cancelled["income_record_id"] == issued["income_record_id"]
     assert cancelled["metadata"]["cancellation"]["reason"] == "Incorrect buyer reference"
     assert final_path.exists()
+    deleted = invoices.delete_invoice(cancelled["id"])
+    assert deleted["income_record_preserved"] is True
+    assert not final_path.exists()
+    with invoice_env["database"].get_connection() as conn:
+        preserved_income = conn.execute(
+            "SELECT id FROM income_records WHERE id = ?", (issued["income_record_id"],)
+        ).fetchone()
+    assert preserved_income is not None
 
 
 def test_issue_without_ledger_link_creates_no_income(invoice_env):
@@ -317,6 +333,46 @@ def test_issue_without_ledger_link_creates_no_income(invoice_env):
     with invoice_env["database"].get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS count FROM income_records").fetchone()["count"]
     assert count == 0
+
+
+def test_cancelled_invoice_can_be_deleted_and_number_reused(invoice_env):
+    invoices = invoice_env["invoices"]
+    payload = invoice_payload(
+        invoice_env,
+        invoice_number="006/2026-27",
+        tds_rate=0,
+    )
+    draft = invoices.create_invoice_draft(payload)
+    issued = invoices.issue_invoice(draft["id"])
+    pdf_path = invoices.invoice_pdf_file(issued["id"])
+    assert pdf_path.exists()
+
+    with pytest.raises(invoices.InvoiceConflictError, match="draft or cancelled"):
+        invoices.delete_invoice(issued["id"])
+
+    cancelled = invoices.cancel_invoice(issued["id"], "Number will be reused")
+    deleted = invoices.delete_invoice(cancelled["id"])
+    assert deleted == {
+        "deleted": True,
+        "id": cancelled["id"],
+        "status": "cancelled",
+        "pdf_deleted": True,
+        "income_record_preserved": False,
+    }
+    assert not pdf_path.exists()
+    with pytest.raises(KeyError):
+        invoices.get_invoice(cancelled["id"])
+
+    replacement = invoices.create_invoice_draft(payload)
+    assert replacement["invoice_number"] == "006/2026-27"
+    assert replacement["id"] != cancelled["id"]
+    with invoice_env["database"].get_connection() as conn:
+        audit = conn.execute(
+            "SELECT before_json, after_json FROM audit_events "
+            "WHERE event_type = 'delete_cancelled_invoice' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert json.loads(audit["before_json"])["invoice_number"] == "006/2026-27"
+    assert json.loads(audit["after_json"])["deleted"] is True
 
 
 def test_backup_restore_preserves_generated_invoice_pdf(invoice_env, monkeypatch):
@@ -409,3 +465,19 @@ def test_invoice_api_routes_are_authenticated_and_cover_lifecycle(invoice_env):
     )
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
+
+    deleted = client.delete(f"/api/invoices/{invoice['id']}", headers=headers)
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["status"] == "cancelled"
+    assert client.get(f"/api/invoices/{invoice['id']}", headers=headers).status_code == 404
+
+    reused = client.post(
+        "/api/invoices",
+        headers=headers,
+        json=invoice_payload(
+            invoice_env,
+            invoice_number="009/2026-27",
+            tds_rate=0,
+        ),
+    )
+    assert reused.status_code == 200, reused.text

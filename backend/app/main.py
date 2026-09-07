@@ -67,7 +67,7 @@ from .invoices import (
     create_invoice_draft,
     create_invoice_profile,
     delete_invoice_client,
-    delete_invoice_draft,
+    delete_invoice,
     delete_invoice_profile,
     get_invoice,
     invoice_pdf_file,
@@ -1204,7 +1204,7 @@ def invoices_update(invoice_id: int, payload: InvoiceDraftPayload) -> dict:
 @app.delete("/api/invoices/{invoice_id}")
 def invoices_delete(invoice_id: int) -> dict:
     try:
-        return delete_invoice_draft(invoice_id)
+        return delete_invoice(invoice_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except InvoiceConflictError as exc:
